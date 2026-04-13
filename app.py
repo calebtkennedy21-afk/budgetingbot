@@ -43,6 +43,7 @@ AUTH_SALT_ENV = "BUDGETBOT_PASSWORD_SALT"
 AUTH_HASH_ENV = "BUDGETBOT_PASSWORD_HASH"
 AUTH_TIMEOUT_ENV = "BUDGETBOT_SESSION_TIMEOUT_MINUTES"
 AUTH_ITERATIONS = 200_000
+AUTH_SETUP_FILE = ".streamlit/secrets.toml"
 
 
 def _secret_or_env(name: str, default: str = "") -> str:
@@ -59,6 +60,45 @@ def _hash_password(password: str, salt_hex: str) -> str:
         "sha256", password.encode("utf-8"), salt, AUTH_ITERATIONS
     )
     return digest.hex()
+
+
+def _upsert_local_secrets(values: dict) -> tuple[bool, str]:
+    auth_keys = {
+        AUTH_USER_ENV,
+        AUTH_SALT_ENV,
+        AUTH_HASH_ENV,
+        AUTH_TIMEOUT_ENV,
+    }
+
+    try:
+        os.makedirs(os.path.dirname(AUTH_SETUP_FILE), exist_ok=True)
+        existing_lines = []
+        if os.path.exists(AUTH_SETUP_FILE):
+            with open(AUTH_SETUP_FILE, "r", encoding="utf-8") as f:
+                existing_lines = f.read().splitlines()
+
+        cleaned = []
+        for line in existing_lines:
+            stripped = line.lstrip()
+            if any(
+                stripped.startswith(f"{key}=") or stripped.startswith(f"{key} =")
+                for key in auth_keys
+            ):
+                continue
+            cleaned.append(line)
+
+        if cleaned and cleaned[-1].strip():
+            cleaned.append("")
+
+        for key, value in values.items():
+            cleaned.append(f'{key} = "{value}"')
+
+        with open(AUTH_SETUP_FILE, "w", encoding="utf-8") as f:
+            f.write("\n".join(cleaned).rstrip() + "\n")
+
+        return True, AUTH_SETUP_FILE
+    except OSError as exc:
+        return False, str(exc)
 
 
 def _is_session_expired(timeout_minutes: int) -> bool:
@@ -89,10 +129,52 @@ def _render_login() -> None:
     password_hash = _secret_or_env(AUTH_HASH_ENV)
 
     if not username or not password_salt or not password_hash:
-        st.error(
-            "Authentication is not configured. Set BUDGETBOT_USERNAME, "
-            "BUDGETBOT_PASSWORD_SALT, and BUDGETBOT_PASSWORD_HASH."
-        )
+        st.warning("Authentication is not configured yet.")
+        st.subheader("First-Time Setup")
+        st.caption("Create your login credentials. The password is stored as a secure hash.")
+
+        with st.form("auth_setup_form", clear_on_submit=True):
+            setup_user = st.text_input("Choose a username")
+            setup_password = st.text_input("Choose a password", type="password")
+            setup_password_confirm = st.text_input("Confirm password", type="password")
+            setup_timeout = st.number_input(
+                "Session timeout (minutes)", min_value=1, max_value=480, value=30, step=1
+            )
+            setup_submitted = st.form_submit_button("Save credentials")
+
+            if setup_submitted:
+                if not setup_user.strip():
+                    st.error("Username is required.")
+                elif len(setup_password) < 8:
+                    st.error("Password must be at least 8 characters.")
+                elif setup_password != setup_password_confirm:
+                    st.error("Passwords do not match.")
+                else:
+                    new_salt = os.urandom(16).hex()
+                    new_hash = _hash_password(setup_password, new_salt)
+
+                    values = {
+                        AUTH_USER_ENV: setup_user.strip(),
+                        AUTH_SALT_ENV: new_salt,
+                        AUTH_HASH_ENV: new_hash,
+                        AUTH_TIMEOUT_ENV: str(int(setup_timeout)),
+                    }
+
+                    ok, detail = _upsert_local_secrets(values)
+                    if ok:
+                        # Ensure current process can authenticate immediately after rerun.
+                        for key, value in values.items():
+                            os.environ[key] = value
+                        st.success(
+                            "Credentials saved. Please log in with your new username and password."
+                        )
+                        st.rerun()
+                    else:
+                        st.error(
+                            "Could not save credentials automatically. "
+                            "Please set environment variables manually. "
+                            f"Details: {detail}"
+                        )
         st.stop()
 
     try:
