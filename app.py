@@ -161,20 +161,27 @@ def _render_login() -> None:
                     }
 
                     ok, detail = _upsert_local_secrets(values)
+                    # Ensure current process can authenticate immediately after rerun.
+                    for key, value in values.items():
+                        os.environ[key] = value
+
                     if ok:
-                        # Ensure current process can authenticate immediately after rerun.
-                        for key, value in values.items():
-                            os.environ[key] = value
                         st.success(
                             "Credentials saved. Please log in with your new username and password."
                         )
                         st.rerun()
                     else:
-                        st.error(
-                            "Could not save credentials automatically. "
-                            "Please set environment variables manually. "
-                            f"Details: {detail}"
+                        st.warning(
+                            "Could not write .streamlit/secrets.toml. "
+                            "Using temporary in-memory credentials for this running app."
                         )
+                        st.caption(
+                            "If the app restarts, set BUDGETBOT_USERNAME, "
+                            "BUDGETBOT_PASSWORD_SALT, and BUDGETBOT_PASSWORD_HASH "
+                            "as deployment environment variables."
+                        )
+                        st.caption(f"Details: {detail}")
+                        st.rerun()
         st.stop()
 
     try:
