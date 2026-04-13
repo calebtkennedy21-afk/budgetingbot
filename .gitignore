@@ -18,3 +18,4 @@ env/
 .idea/
 .vscode/
 *.log
+.streamlit/secrets.toml
