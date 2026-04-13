@@ -12,6 +12,8 @@ Pages
 """
 
 import calendar
+import hashlib
+import hmac
 import os
 from datetime import date, datetime
 
@@ -31,6 +33,114 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded",
 )
+
+
+# ---------------------------------------------------------------------------
+# Auth config
+# ---------------------------------------------------------------------------
+AUTH_USER_ENV = "BUDGETBOT_USERNAME"
+AUTH_SALT_ENV = "BUDGETBOT_PASSWORD_SALT"
+AUTH_HASH_ENV = "BUDGETBOT_PASSWORD_HASH"
+AUTH_TIMEOUT_ENV = "BUDGETBOT_SESSION_TIMEOUT_MINUTES"
+AUTH_ITERATIONS = 200_000
+
+
+def _secret_or_env(name: str, default: str = "") -> str:
+    # Prefer Streamlit secrets in cloud deployments; fall back to environment.
+    value = st.secrets.get(name, default)
+    if value in (None, ""):
+        value = os.getenv(name, default)
+    return str(value)
+
+
+def _hash_password(password: str, salt_hex: str) -> str:
+    salt = bytes.fromhex(salt_hex)
+    digest = hashlib.pbkdf2_hmac(
+        "sha256", password.encode("utf-8"), salt, AUTH_ITERATIONS
+    )
+    return digest.hex()
+
+
+def _is_session_expired(timeout_minutes: int) -> bool:
+    if not st.session_state.get("authenticated"):
+        return False
+
+    last_activity = st.session_state.get("last_activity")
+    if not last_activity:
+        return True
+
+    now = datetime.utcnow()
+    elapsed = (now - datetime.fromisoformat(last_activity)).total_seconds()
+    return elapsed > timeout_minutes * 60
+
+
+def _logout() -> None:
+    st.session_state["authenticated"] = False
+    st.session_state["auth_user"] = ""
+    st.session_state["last_activity"] = ""
+
+
+def _render_login() -> None:
+    st.title("🔒 Login Required")
+    st.caption("Sign in to access your budgeting data.")
+
+    username = _secret_or_env(AUTH_USER_ENV)
+    password_salt = _secret_or_env(AUTH_SALT_ENV)
+    password_hash = _secret_or_env(AUTH_HASH_ENV)
+
+    if not username or not password_salt or not password_hash:
+        st.error(
+            "Authentication is not configured. Set BUDGETBOT_USERNAME, "
+            "BUDGETBOT_PASSWORD_SALT, and BUDGETBOT_PASSWORD_HASH."
+        )
+        st.stop()
+
+    try:
+        _ = bytes.fromhex(password_salt)
+        _ = bytes.fromhex(password_hash)
+    except ValueError:
+        st.error("Authentication settings are invalid. Salt/hash must be hex strings.")
+        st.stop()
+
+    with st.form("login_form", clear_on_submit=True):
+        entered_user = st.text_input("Username")
+        entered_password = st.text_input("Password", type="password")
+        submitted = st.form_submit_button("Log in")
+
+        if submitted:
+            entered_hash = _hash_password(entered_password, password_salt)
+            user_match = hmac.compare_digest(entered_user, username)
+            pass_match = hmac.compare_digest(entered_hash, password_hash)
+
+            if user_match and pass_match:
+                st.session_state["authenticated"] = True
+                st.session_state["auth_user"] = entered_user
+                st.session_state["last_activity"] = datetime.utcnow().isoformat()
+                st.rerun()
+            else:
+                st.error("Invalid username or password.")
+
+
+if "authenticated" not in st.session_state:
+    st.session_state["authenticated"] = False
+if "auth_user" not in st.session_state:
+    st.session_state["auth_user"] = ""
+if "last_activity" not in st.session_state:
+    st.session_state["last_activity"] = ""
+
+try:
+    session_timeout_minutes = max(1, int(_secret_or_env(AUTH_TIMEOUT_ENV, "30")))
+except ValueError:
+    session_timeout_minutes = 30
+if _is_session_expired(session_timeout_minutes):
+    _logout()
+    st.warning("Your session expired. Please log in again.")
+
+if not st.session_state["authenticated"]:
+    _render_login()
+    st.stop()
+
+st.session_state["last_activity"] = datetime.utcnow().isoformat()
 
 db.init_db()
 
@@ -74,6 +184,10 @@ MONTHS = {i: calendar.month_name[i] for i in range(1, 13)}
 # ---------------------------------------------------------------------------
 with st.sidebar:
     st.title("💸 Budgeting Bot")
+    st.caption(f"Signed in as: {st.session_state['auth_user']}")
+    if st.button("🚪 Log out", use_container_width=True):
+        _logout()
+        st.rerun()
     st.markdown("---")
 
     page = st.radio(

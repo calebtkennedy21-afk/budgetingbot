@@ -57,3 +57,33 @@ The app opens at <http://localhost:8501>.
 |----------|---------|-------------|
 | `DB_PATH` | `budget.db` | Path to the SQLite database file |
 | `PORT` | `8501` | Port for Railway / Heroku (set automatically) |
+| `BUDGETBOT_USERNAME` | _(required)_ | Login username |
+| `BUDGETBOT_PASSWORD_SALT` | _(required)_ | Hex-encoded random salt for password hashing |
+| `BUDGETBOT_PASSWORD_HASH` | _(required)_ | Hex-encoded PBKDF2-SHA256 password hash |
+| `BUDGETBOT_SESSION_TIMEOUT_MINUTES` | `30` | Session timeout after inactivity |
+
+### Configure Login Credentials
+
+The app now requires login before any budgeting data is shown. Configure these variables in your environment (or Streamlit secrets) before running/deploying.
+
+Generate a secure salt + hash pair:
+
+```bash
+python - <<'PY'
+import hashlib, os
+password = input('Enter a strong password: ').encode()
+salt = os.urandom(16)
+pwd_hash = hashlib.pbkdf2_hmac('sha256', password, salt, 200000)
+print('BUDGETBOT_PASSWORD_SALT=' + salt.hex())
+print('BUDGETBOT_PASSWORD_HASH=' + pwd_hash.hex())
+PY
+```
+
+Then set:
+
+```bash
+export BUDGETBOT_USERNAME="your-username"
+export BUDGETBOT_PASSWORD_SALT="<hex from script>"
+export BUDGETBOT_PASSWORD_HASH="<hex from script>"
+export BUDGETBOT_SESSION_TIMEOUT_MINUTES="30"
+```
