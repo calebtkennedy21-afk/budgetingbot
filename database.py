@@ -87,6 +87,9 @@ def _write(query: str, params: tuple = ()) -> None:
 # Schema initialisation
 # ---------------------------------------------------------------------------
 
+SAVINGS_ACCOUNTS = ["Caleb Savings", "Jamie Savings", "Joint Savings"]
+
+
 def init_db() -> None:
     """Create all tables if they don't already exist."""
     if _is_pg():
@@ -144,6 +147,18 @@ def init_db() -> None:
                                        DEFAULT to_char(now(), 'YYYY-MM-DD HH24:MI:SS')
                     )
                 """)
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS savings_transactions (
+                        id          SERIAL PRIMARY KEY,
+                        account     TEXT   NOT NULL,
+                        date        TEXT   NOT NULL,
+                        amount      REAL   NOT NULL CHECK(amount > 0),
+                        type        TEXT   NOT NULL CHECK(type IN ('deposit','withdrawal')),
+                        description TEXT,
+                        created_at  TEXT   NOT NULL
+                                    DEFAULT to_char(now(), 'YYYY-MM-DD HH24:MI:SS')
+                    )
+                """)
             conn.commit()
         finally:
             conn.close()
@@ -189,6 +204,16 @@ def init_db() -> None:
                 target_date    TEXT,
                 description    TEXT,
                 created_at     TEXT    NOT NULL DEFAULT (datetime('now'))
+            );
+
+            CREATE TABLE IF NOT EXISTS savings_transactions (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                account     TEXT    NOT NULL,
+                date        TEXT    NOT NULL,
+                amount      REAL    NOT NULL CHECK(amount > 0),
+                type        TEXT    NOT NULL CHECK(type IN ('deposit','withdrawal')),
+                description TEXT,
+                created_at  TEXT    NOT NULL DEFAULT (datetime('now'))
             );
         """)
         conn.commit()
@@ -328,6 +353,57 @@ def update_goal_progress(record_id: int, current_amount: float) -> None:
 
 def delete_financial_goal(record_id: int) -> None:
     _write("DELETE FROM financial_goals WHERE id = %s", (record_id,))
+
+
+# ---------------------------------------------------------------------------
+# Savings
+# ---------------------------------------------------------------------------
+
+def add_savings_transaction(
+    account: str,
+    date: str,
+    amount: float,
+    transaction_type: str,
+    description: str = "",
+) -> None:
+    _write(
+        """INSERT INTO savings_transactions
+           (account, date, amount, type, description)
+           VALUES (%s, %s, %s, %s, %s)""",
+        (account, date, amount, transaction_type, description),
+    )
+
+
+def get_savings_transactions(account: str = None):
+    if account:
+        return _read(
+            "SELECT * FROM savings_transactions WHERE account = %s ORDER BY date DESC",
+            (account,),
+        )
+    return _read("SELECT * FROM savings_transactions ORDER BY account, date DESC")
+
+
+def get_savings_balance(account: str) -> float:
+    rows = _read(
+        "SELECT type, amount FROM savings_transactions WHERE account = %s",
+        (account,),
+    )
+    balance = 0.0
+    for r in rows:
+        if r["type"] == "deposit":
+            balance += r["amount"]
+        else:
+            balance -= r["amount"]
+    return balance
+
+
+def get_all_savings_balances() -> dict:
+    """Return {account_name: balance} for all three savings accounts."""
+    return {acct: get_savings_balance(acct) for acct in SAVINGS_ACCOUNTS}
+
+
+def delete_savings_transaction(record_id: int) -> None:
+    _write("DELETE FROM savings_transactions WHERE id = %s", (record_id,))
 
 
 # ---------------------------------------------------------------------------

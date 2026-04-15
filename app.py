@@ -297,6 +297,7 @@ with st.sidebar:
             "💰 Income",
             "📌 Fixed Expenses",
             "🛒 Variable Expenses",
+            "💵 Savings",
             "🎯 Financial Goals",
             "📈 Reports",
         ],
@@ -425,6 +426,19 @@ if page == "📊 Dashboard":
                 + (f"  *(target: {g['target_date']})*" if g["target_date"] else "")
             )
             st.progress(pct / 100)
+
+    # --- savings snapshot ---------------------------------------------------
+    savings_balances = db.get_all_savings_balances()
+    total_saved = sum(savings_balances.values())
+    if total_saved > 0 or any(True for _ in savings_balances):
+        st.markdown("---")
+        st.subheader("💵 Savings Snapshot")
+        sav_cols = st.columns(len(db.SAVINGS_ACCOUNTS) + 1)
+        for i, acct in enumerate(db.SAVINGS_ACCOUNTS):
+            with sav_cols[i]:
+                st.metric(acct, f"${savings_balances[acct]:,.2f}")
+        with sav_cols[-1]:
+            st.metric("Total Savings", f"${total_saved:,.2f}")
 
 
 # ===========================================================================
@@ -610,6 +624,121 @@ elif page == "🛒 Variable Expenses":
             st.rerun()
     else:
         st.info("No variable expenses for this period.")
+
+
+# ===========================================================================
+# PAGE: SAVINGS
+# ===========================================================================
+elif page == "💵 Savings":
+    st.title("💵 Savings")
+
+    SAVINGS_ACCOUNTS = db.SAVINGS_ACCOUNTS
+
+    # --- current balances KPI row ------------------------------------------
+    balances = db.get_all_savings_balances()
+    total_savings = sum(balances.values())
+
+    kpi_cols = st.columns(len(SAVINGS_ACCOUNTS) + 1)
+    for i, acct in enumerate(SAVINGS_ACCOUNTS):
+        with kpi_cols[i]:
+            st.metric(acct, f"${balances[acct]:,.2f}")
+    with kpi_cols[-1]:
+        st.metric("Total Savings", f"${total_savings:,.2f}")
+
+    st.markdown("---")
+
+    # --- add transaction form ----------------------------------------------
+    with st.expander("➕ Add Transaction", expanded=True):
+        with st.form("savings_form", clear_on_submit=True):
+            c1, c2 = st.columns(2)
+            with c1:
+                sav_account = st.selectbox("Account", SAVINGS_ACCOUNTS)
+                sav_type = st.selectbox("Type", ["deposit", "withdrawal"])
+                sav_amount = st.number_input(
+                    "Amount ($)", min_value=0.01, step=0.01, format="%.2f"
+                )
+            with c2:
+                sav_date = st.date_input("Date", value=today)
+                sav_desc = st.text_input("Description (optional)")
+            submitted = st.form_submit_button("Add Transaction")
+            if submitted:
+                if sav_amount <= 0:
+                    st.error("Amount must be greater than zero.")
+                else:
+                    # Guard against withdrawing more than the current balance
+                    current_bal = db.get_savings_balance(sav_account)
+                    if sav_type == "withdrawal" and sav_amount > current_bal:
+                        st.error(
+                            f"Withdrawal of ${sav_amount:,.2f} exceeds the current "
+                            f"{sav_account} balance of ${current_bal:,.2f}."
+                        )
+                    else:
+                        db.add_savings_transaction(
+                            sav_account, str(sav_date), sav_amount, sav_type, sav_desc
+                        )
+                        action = "Deposited" if sav_type == "deposit" else "Withdrew"
+                        st.success(
+                            f"✅ {action} ${sav_amount:,.2f} {'to' if sav_type == 'deposit' else 'from'} {sav_account}."
+                        )
+                        st.rerun()
+
+    # --- per-account transaction history -----------------------------------
+    st.subheader("Transaction History")
+    view_acct = st.selectbox("View account", ["All"] + SAVINGS_ACCOUNTS, key="sav_view")
+
+    rows = (
+        db.get_savings_transactions()
+        if view_acct == "All"
+        else db.get_savings_transactions(account=view_acct)
+    )
+
+    if rows:
+        df_sav = _to_df(rows)
+        df_show = df_sav[["id", "account", "date", "type", "amount", "description"]].copy()
+        df_show.columns = ["ID", "Account", "Date", "Type", "Amount ($)", "Description"]
+        df_show["Amount ($)"] = df_show["Amount ($)"].map(lambda x: f"{x:,.2f}")
+        st.dataframe(df_show, use_container_width=True, hide_index=True)
+
+        # running balance chart per account
+        if view_acct != "All":
+            df_chart = df_sav.sort_values("date").copy()
+            df_chart["signed"] = df_chart.apply(
+                lambda r: r["amount"] if r["type"] == "deposit" else -r["amount"], axis=1
+            )
+            df_chart["balance"] = df_chart["signed"].cumsum()
+            fig_bal = px.line(
+                df_chart,
+                x="date",
+                y="balance",
+                title=f"{view_acct} — Running Balance",
+                labels={"balance": "Balance ($)", "date": "Date"},
+                markers=True,
+            )
+            fig_bal.update_layout(height=320, margin=dict(t=40, b=0))
+            st.plotly_chart(fig_bal, use_container_width=True)
+        else:
+            # stacked bar showing balance per account
+            bar_data = [{"Account": a, "Balance ($)": balances[a]} for a in SAVINGS_ACCOUNTS]
+            fig_bar = px.bar(
+                bar_data,
+                x="Account",
+                y="Balance ($)",
+                color="Account",
+                title="Current Balance by Account",
+            )
+            fig_bar.update_layout(showlegend=False, height=300, margin=dict(t=40, b=0))
+            st.plotly_chart(fig_bar, use_container_width=True)
+
+        st.markdown("---")
+        del_id = st.number_input(
+            "Delete transaction by ID", min_value=1, step=1, key="del_sav"
+        )
+        if st.button("🗑 Delete Transaction"):
+            db.delete_savings_transaction(int(del_id))
+            st.success("Transaction deleted.")
+            st.rerun()
+    else:
+        st.info("No savings transactions recorded yet.")
 
 
 # ===========================================================================
