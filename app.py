@@ -121,6 +121,27 @@ def _logout() -> None:
 
 
 def _render_login() -> None:
+    # Show post-setup credential reminder (survives a single rerun)
+    if st.session_state.get("_credential_warning"):
+        env_vars = st.session_state["_credential_warning"]
+        with st.expander(
+            "⚠️ Action required — save these to Railway to prevent re-setup on restart",
+            expanded=True,
+        ):
+            st.warning(
+                "Your credentials are saved in a local file that is **deleted whenever "
+                "the server container restarts** (Railway, Heroku, etc.). "
+                "Copy the values below into your **Railway → Variables** panel so they "
+                "persist across restarts. Your budget data will also be lost on restart "
+                "unless you add a **Railway PostgreSQL plugin** (the app uses it automatically "
+                "when `DATABASE_URL` is set)."
+            )
+            st.code(
+                "\n".join(f"{k}={v}" for k, v in env_vars.items()),
+                language="bash",
+            )
+        st.divider()
+
     st.title("🔒 Login Required")
     st.caption("Sign in to access your budgeting data.")
 
@@ -165,23 +186,12 @@ def _render_login() -> None:
                     for key, value in values.items():
                         os.environ[key] = value
 
-                    if ok:
-                        st.success(
-                            "Credentials saved. Please log in with your new username and password."
-                        )
-                        st.rerun()
-                    else:
-                        st.warning(
-                            "Could not write .streamlit/secrets.toml. "
-                            "Using temporary in-memory credentials for this running app."
-                        )
-                        st.caption(
-                            "If the app restarts, set BUDGETBOT_USERNAME, "
-                            "BUDGETBOT_PASSWORD_SALT, and BUDGETBOT_PASSWORD_HASH "
-                            "as deployment environment variables."
-                        )
-                        st.caption(f"Details: {detail}")
-                        st.rerun()
+                    # Store credential values in session state so the next render
+                    # can show them for the user to copy into Railway Variables.
+                    st.session_state["_credential_warning"] = values
+                    if not ok:
+                        st.session_state["_credential_warning"]["_write_error"] = detail
+                    st.rerun()
         st.stop()
 
     try:
@@ -205,6 +215,7 @@ def _render_login() -> None:
                 st.session_state["authenticated"] = True
                 st.session_state["auth_user"] = entered_user
                 st.session_state["last_activity"] = datetime.utcnow().isoformat()
+                st.session_state.pop("_credential_warning", None)
                 st.rerun()
             else:
                 st.error("Invalid username or password.")
