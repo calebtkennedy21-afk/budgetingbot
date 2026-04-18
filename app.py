@@ -48,10 +48,36 @@ AUTH_SETUP_FILE = ".streamlit/secrets.toml"
 
 def _secret_or_env(name: str, default: str = "") -> str:
     # Prefer Streamlit secrets in cloud deployments; fall back to environment.
-    value = st.secrets.get(name, default)
-    if value in (None, ""):
-        value = os.getenv(name, default)
-    return str(value)
+    try:
+        value = st.secrets.get(name)
+        if value not in (None, ""):
+            return str(value)
+    except Exception:
+        pass
+    return str(os.getenv(name, default) or default)
+
+
+def _load_secrets_into_env() -> None:
+    """Read .streamlit/secrets.toml and populate os.environ for keys not already set.
+    This ensures credentials written by the setup flow are available even when
+    Streamlit's secrets cache hasn't refreshed yet."""
+    if not os.path.exists(AUTH_SETUP_FILE):
+        return
+    try:
+        with open(AUTH_SETUP_FILE, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("#"):
+                    continue
+                if "=" not in line:
+                    continue
+                key, _, raw_value = line.partition("=")
+                key = key.strip()
+                raw_value = raw_value.strip().strip('"').strip("'")
+                if key and raw_value and not os.getenv(key):
+                    os.environ[key] = raw_value
+    except OSError:
+        pass
 
 
 def _hash_password(password: str, salt_hex: str) -> str:
@@ -220,6 +246,10 @@ def _render_login() -> None:
             else:
                 st.error("Invalid username or password.")
 
+
+# Load credentials from secrets.toml into env vars so they survive reruns
+# even when Streamlit's secrets cache hasn't refreshed yet.
+_load_secrets_into_env()
 
 if "authenticated" not in st.session_state:
     st.session_state["authenticated"] = False
