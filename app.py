@@ -135,7 +135,7 @@ def _is_session_expired(timeout_minutes: int) -> bool:
     if not last_activity:
         return True
 
-    now = datetime.utcnow()
+    now = datetime.now(datetime.UTC)
     elapsed = (now - datetime.fromisoformat(last_activity)).total_seconds()
     return elapsed > timeout_minutes * 60
 
@@ -240,7 +240,7 @@ def _render_login() -> None:
             if user_match and pass_match:
                 st.session_state["authenticated"] = True
                 st.session_state["auth_user"] = entered_user
-                st.session_state["last_activity"] = datetime.utcnow().isoformat()
+                st.session_state["last_activity"] = datetime.now(datetime.UTC).isoformat()
                 st.session_state.pop("_credential_warning", None)
                 st.rerun()
             else:
@@ -270,7 +270,7 @@ if not st.session_state["authenticated"]:
     _render_login()
     st.stop()
 
-st.session_state["last_activity"] = datetime.utcnow().isoformat()
+st.session_state["last_activity"] = datetime.now(datetime.UTC).isoformat()
 
 db_online = True
 db_error = ""
