@@ -272,7 +272,13 @@ if not st.session_state["authenticated"]:
 
 st.session_state["last_activity"] = datetime.utcnow().isoformat()
 
-db.init_db()
+db_online = True
+db_error = ""
+try:
+    db.init_db()
+except Exception as exc:
+    db_online = False
+    db_error = str(exc)
 
 INCOME_CATEGORIES = [
     "Salary",
@@ -315,6 +321,16 @@ MONTHS = {i: calendar.month_name[i] for i in range(1, 13)}
 with st.sidebar:
     st.title("💸 Budgeting Bot")
     st.caption(f"Signed in as: {st.session_state['auth_user']}")
+    if db_online:
+        st.markdown(
+            "<span style='color:#16a34a;'>Database: Online</span>",
+            unsafe_allow_html=True,
+        )
+    else:
+        st.markdown(
+            "<span style='color:#dc2626;'>Database: Offline</span>",
+            unsafe_allow_html=True,
+        )
     if st.button("🚪 Log out", use_container_width=True):
         _logout()
         st.rerun()
@@ -350,6 +366,12 @@ with st.sidebar:
     )
     st.markdown("---")
     st.caption("Data stored in local SQLite database.")
+
+if not db_online:
+    st.error("Database is offline. Please check your database connection and restart the app.")
+    if db_error:
+        st.caption(f"Connection error: {db_error}")
+    st.stop()
 
 
 # ---------------------------------------------------------------------------
