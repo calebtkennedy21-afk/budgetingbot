@@ -119,6 +119,7 @@ def init_db() -> None:
                         start_date  TEXT   NOT NULL,
                         end_date    TEXT,
                         description TEXT,
+                        linked_debt_id INTEGER,
                         created_at  TEXT   NOT NULL
                                     DEFAULT to_char(now(), 'YYYY-MM-DD HH24:MI:SS')
                     )
@@ -174,9 +175,25 @@ def init_db() -> None:
                                               DEFAULT to_char(now(), 'YYYY-MM-DD HH24:MI:SS')
                     )
                 """)
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS debt_payment_log (
+                        id                SERIAL PRIMARY KEY,
+                        debt_id           INTEGER NOT NULL,
+                        fixed_expense_id  INTEGER NOT NULL,
+                        year              INTEGER NOT NULL,
+                        month             INTEGER NOT NULL,
+                        amount            REAL    NOT NULL,
+                        applied_at        TEXT    NOT NULL
+                                          DEFAULT to_char(now(), 'YYYY-MM-DD HH24:MI:SS'),
+                        UNIQUE (debt_id, fixed_expense_id, year, month)
+                    )
+                """)
             conn.commit()
-            # Migration: add minimum_payment_date if it doesn't exist yet
+            # Migration: add linked_debt_id to fixed_expenses if missing
             with conn.cursor() as cur:
+                cur.execute("""
+                    ALTER TABLE fixed_expenses ADD COLUMN IF NOT EXISTS linked_debt_id INTEGER
+                """)
                 cur.execute("""
                     ALTER TABLE debts ADD COLUMN IF NOT EXISTS minimum_payment_date TEXT
                 """)
@@ -196,16 +213,17 @@ def init_db() -> None:
             );
 
             CREATE TABLE IF NOT EXISTS fixed_expenses (
-                id          INTEGER PRIMARY KEY AUTOINCREMENT,
-                name        TEXT    NOT NULL,
-                amount      REAL    NOT NULL CHECK(amount > 0),
-                category    TEXT    NOT NULL DEFAULT 'General',
-                frequency   TEXT    NOT NULL DEFAULT 'monthly'
-                                    CHECK(frequency IN ('monthly','yearly')),
-                start_date  TEXT    NOT NULL,
-                end_date    TEXT,
-                description TEXT,
-                created_at  TEXT    NOT NULL DEFAULT (datetime('now'))
+                id             INTEGER PRIMARY KEY AUTOINCREMENT,
+                name           TEXT    NOT NULL,
+                amount         REAL    NOT NULL CHECK(amount > 0),
+                category       TEXT    NOT NULL DEFAULT 'General',
+                frequency      TEXT    NOT NULL DEFAULT 'monthly'
+                                       CHECK(frequency IN ('monthly','yearly')),
+                start_date     TEXT    NOT NULL,
+                end_date       TEXT,
+                description    TEXT,
+                linked_debt_id INTEGER,
+                created_at     TEXT    NOT NULL DEFAULT (datetime('now'))
             );
 
             CREATE TABLE IF NOT EXISTS variable_expenses (
@@ -249,12 +267,27 @@ def init_db() -> None:
                 description           TEXT,
                 created_at            TEXT    NOT NULL DEFAULT (datetime('now'))
             );
+
+            CREATE TABLE IF NOT EXISTS debt_payment_log (
+                id                INTEGER PRIMARY KEY AUTOINCREMENT,
+                debt_id           INTEGER NOT NULL,
+                fixed_expense_id  INTEGER NOT NULL,
+                year              INTEGER NOT NULL,
+                month             INTEGER NOT NULL,
+                amount            REAL    NOT NULL,
+                applied_at        TEXT    NOT NULL DEFAULT (datetime('now')),
+                UNIQUE (debt_id, fixed_expense_id, year, month)
+            );
         """)
         conn.commit()
-        # Migration: add minimum_payment_date if it doesn't exist yet
-        cols = [row[1] for row in conn.execute("PRAGMA table_info(debts)").fetchall()]
-        if "minimum_payment_date" not in cols:
+        # Migrations for existing databases
+        cols_debts = [row[1] for row in conn.execute("PRAGMA table_info(debts)").fetchall()]
+        if "minimum_payment_date" not in cols_debts:
             conn.execute("ALTER TABLE debts ADD COLUMN minimum_payment_date TEXT")
+            conn.commit()
+        cols_fe = [row[1] for row in conn.execute("PRAGMA table_info(fixed_expenses)").fetchall()]
+        if "linked_debt_id" not in cols_fe:
+            conn.execute("ALTER TABLE fixed_expenses ADD COLUMN linked_debt_id INTEGER")
             conn.commit()
         conn.close()
 
@@ -327,6 +360,61 @@ def update_fixed_expense_end_date(record_id: int, end_date: str) -> None:
     _write(
         "UPDATE fixed_expenses SET end_date = %s WHERE id = %s",
         (end_date, record_id),
+    )
+
+
+def link_fixed_expense_to_debt(fixed_expense_id: int, debt_id: int) -> None:
+    _write(
+        "UPDATE fixed_expenses SET linked_debt_id = %s WHERE id = %s",
+        (debt_id, fixed_expense_id),
+    )
+
+
+def unlink_fixed_expense_from_debt(fixed_expense_id: int) -> None:
+    _write(
+        "UPDATE fixed_expenses SET linked_debt_id = NULL WHERE id = %s",
+        (fixed_expense_id,),
+    )
+
+
+def get_linked_fixed_expenses(debt_id: int):
+    """Return all fixed expenses linked to a given debt."""
+    return _read(
+        "SELECT * FROM fixed_expenses WHERE linked_debt_id = %s ORDER BY name",
+        (debt_id,),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Debt Payment Log
+# ---------------------------------------------------------------------------
+
+def is_debt_payment_applied(debt_id: int, fixed_expense_id: int, year: int, month: int) -> bool:
+    rows = _read(
+        """SELECT id FROM debt_payment_log
+           WHERE debt_id = %s AND fixed_expense_id = %s AND year = %s AND month = %s""",
+        (debt_id, fixed_expense_id, year, month),
+    )
+    return len(rows) > 0
+
+
+def apply_debt_payment(debt_id: int, fixed_expense_id: int, year: int, month: int, amount: float) -> None:
+    """Reduce the debt balance and log the payment. Raises if already applied."""
+    _write(
+        """INSERT INTO debt_payment_log (debt_id, fixed_expense_id, year, month, amount)
+           VALUES (%s, %s, %s, %s, %s)""",
+        (debt_id, fixed_expense_id, year, month, amount),
+    )
+    rows = _read("SELECT current_balance FROM debts WHERE id = %s", (debt_id,))
+    if rows:
+        new_balance = max(rows[0]["current_balance"] - amount, 0.0)
+        _write("UPDATE debts SET current_balance = %s WHERE id = %s", (new_balance, debt_id))
+
+
+def get_debt_payment_log(debt_id: int):
+    return _read(
+        "SELECT * FROM debt_payment_log WHERE debt_id = %s ORDER BY year DESC, month DESC",
+        (debt_id,),
     )
 
 

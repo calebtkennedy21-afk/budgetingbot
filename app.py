@@ -630,6 +630,43 @@ elif page == "📌 Fixed Expenses":
                 db.delete_fixed_expense(int(del_id))
                 st.success("Entry deleted.")
                 st.rerun()
+
+        # --- link fixed expense to a debt ----------------------------------
+        debts_for_link = db.get_debts()
+        if debts_for_link:
+            st.markdown("---")
+            st.subheader("🔗 Link Fixed Expense to Debt")
+            st.caption(
+                "Tag a fixed expense (e.g. 'Car Loan Payment') as a payment toward a debt. "
+                "Once linked, you can apply that payment to reduce the debt balance each month from the Debt page."
+            )
+            link_col1, link_col2 = st.columns(2)
+            with link_col1:
+                link_fe_id = st.number_input("Fixed Expense ID", min_value=1, step=1, key="link_fe_id")
+                debt_options = {f"{d['name']} (ID {d['id']})": d["id"] for d in debts_for_link}
+                selected_debt_label = st.selectbox("Link to Debt", list(debt_options.keys()), key="link_debt_sel")
+                if st.button("🔗 Link"):
+                    db.link_fixed_expense_to_debt(int(link_fe_id), debt_options[selected_debt_label])
+                    st.success(f"Fixed Expense {link_fe_id} linked to {selected_debt_label}.")
+                    st.rerun()
+            with link_col2:
+                unlink_fe_id = st.number_input("Fixed Expense ID to Unlink", min_value=1, step=1, key="unlink_fe_id")
+                if st.button("🔓 Unlink"):
+                    db.unlink_fixed_expense_from_debt(int(unlink_fe_id))
+                    st.success(f"Fixed Expense {unlink_fe_id} unlinked.")
+                    st.rerun()
+
+            # show current links
+            df_links = _to_df(rows)
+            linked_rows = df_links[df_links["linked_debt_id"].notna()][["id", "name", "amount", "linked_debt_id"]].copy()
+            if not linked_rows.empty:
+                debt_id_to_name = {d["id"]: d["name"] for d in debts_for_link}
+                linked_rows["Linked Debt"] = linked_rows["linked_debt_id"].map(
+                    lambda x: debt_id_to_name.get(int(x), f"ID {int(x)}")
+                )
+                linked_rows = linked_rows.rename(columns={"id": "FE ID", "name": "Fixed Expense", "amount": "Amount ($)"})
+                linked_rows["Amount ($)"] = linked_rows["Amount ($)"].map(lambda x: f"{x:,.2f}")
+                st.dataframe(linked_rows[["FE ID", "Fixed Expense", "Amount ($)", "Linked Debt"]], use_container_width=True, hide_index=True)
     else:
         st.info("No fixed expenses found.")
 
@@ -915,6 +952,35 @@ elif page == "💳 Debt":
                         db.update_debt_balance(d["id"], new_balance)
                         st.success(f"Payment of ${payment_amt:,.2f} applied.")
                         st.rerun()
+
+                    # --- linked fixed expense payments ---------------------
+                    linked_fes = db.get_linked_fixed_expenses(d["id"])
+                    if linked_fes:
+                        st.markdown("**Linked Payments**")
+                        for fe in linked_fes:
+                            already_applied = db.is_debt_payment_applied(
+                                d["id"], fe["id"], sel_year, sel_month
+                            )
+                            label = f"📌 {fe['name']} (${fe['amount']:,.2f})"
+                            if already_applied:
+                                st.caption(f"✅ {MONTHS[sel_month]} {sel_year} applied")
+                            else:
+                                if st.button(
+                                    f"Apply {MONTHS[sel_month]} payment",
+                                    key=f"auto_pay_{d['id']}_{fe['id']}",
+                                    help=label,
+                                ):
+                                    if fe["amount"] > d["current_balance"]:
+                                        st.error("Payment exceeds remaining balance.")
+                                    else:
+                                        db.apply_debt_payment(
+                                            d["id"], fe["id"], sel_year, sel_month, fe["amount"]
+                                        )
+                                        st.success(
+                                            f"✅ Applied ${fe['amount']:,.2f} from '{fe['name']}' "
+                                            f"for {MONTHS[sel_month]} {sel_year}."
+                                        )
+                                        st.rerun()
                 st.markdown("---")
 
         # --- summary chart -------------------------------------------------
