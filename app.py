@@ -344,6 +344,7 @@ with st.sidebar:
             "📌 Fixed Expenses",
             "🛒 Variable Expenses",
             "💵 Savings",
+            "💳 Debt",
             "🎯 Financial Goals",
             "📈 Reports",
         ],
@@ -491,6 +492,19 @@ if page == "📊 Dashboard":
                 st.metric(acct, f"${savings_balances[acct]:,.2f}")
         with sav_cols[-1]:
             st.metric("Total Savings", f"${total_saved:,.2f}")
+
+    # --- debt snapshot ------------------------------------------------------
+    debts_snapshot = db.get_debts()
+    total_debt_dash = sum(d["current_balance"] for d in debts_snapshot)
+    if debts_snapshot:
+        st.markdown("---")
+        st.subheader("💳 Debt Snapshot")
+        debt_dash_cols = st.columns(min(len(debts_snapshot), 4) + 1)
+        for i, d in enumerate(debts_snapshot[:4]):
+            with debt_dash_cols[i]:
+                st.metric(d["name"], f"${d['current_balance']:,.2f}")
+        with debt_dash_cols[-1]:
+            st.metric("Total Debt", f"${total_debt_dash:,.2f}")
 
 
 # ===========================================================================
@@ -791,6 +805,136 @@ elif page == "💵 Savings":
             st.rerun()
     else:
         st.info("No savings transactions recorded yet.")
+
+
+# ===========================================================================
+# PAGE: DEBT
+# ===========================================================================
+elif page == "💳 Debt":
+    st.title("💳 Debt")
+
+    debts = db.get_debts()
+    total_debt = sum(d["current_balance"] for d in debts)
+    total_original = sum(d["original_amount"] for d in debts)
+    total_paid = total_original - total_debt
+
+    # --- KPI row ------------------------------------------------------------
+    k1, k2, k3 = st.columns(3)
+    with k1:
+        st.metric("Total Remaining Debt", f"${total_debt:,.2f}")
+    with k2:
+        st.metric("Original Debt", f"${total_original:,.2f}")
+    with k3:
+        st.metric("Total Paid Off", f"${total_paid:,.2f}")
+
+    st.markdown("---")
+
+    # --- add debt form ------------------------------------------------------
+    with st.expander("➕ Add Debt", expanded=True):
+        with st.form("debt_form", clear_on_submit=True):
+            c1, c2 = st.columns(2)
+            with c1:
+                debt_name = st.text_input("Debt Name (e.g. Car Loan, Credit Card)")
+                debt_original = st.number_input(
+                    "Original Amount ($)", min_value=0.01, step=0.01, format="%.2f"
+                )
+                debt_balance = st.number_input(
+                    "Current Balance ($)", min_value=0.00, step=0.01, format="%.2f"
+                )
+            with c2:
+                debt_cat = st.selectbox("Category", db.DEBT_CATEGORIES)
+                debt_rate = st.number_input(
+                    "Interest Rate (APR %)", min_value=0.0, max_value=100.0, step=0.01, format="%.2f"
+                )
+                debt_min = st.number_input(
+                    "Minimum Payment ($)", min_value=0.0, step=0.01, format="%.2f"
+                )
+                debt_desc = st.text_input("Description (optional)")
+            submitted = st.form_submit_button("Add Debt")
+            if submitted:
+                if not debt_name.strip():
+                    st.error("Debt name is required.")
+                elif debt_original <= 0:
+                    st.error("Original amount must be greater than zero.")
+                elif debt_balance > debt_original:
+                    st.error("Current balance cannot exceed the original amount.")
+                else:
+                    db.add_debt(
+                        debt_name.strip(),
+                        debt_original,
+                        debt_balance,
+                        debt_rate,
+                        debt_min,
+                        debt_cat,
+                        debt_desc,
+                    )
+                    st.success(f"✅ Added debt: {debt_name}")
+                    st.rerun()
+
+    # --- debt list with progress bars --------------------------------------
+    if debts:
+        st.subheader("Your Debts")
+        for d in debts:
+            paid = d["original_amount"] - d["current_balance"]
+            pct = min(paid / d["original_amount"] * 100, 100) if d["original_amount"] > 0 else 0
+            with st.container():
+                col1, col2 = st.columns([3, 1])
+                with col1:
+                    st.markdown(f"### {d['name']} (ID: {d['id']})")
+                    tags = f"**{d['category']}**"
+                    if d["interest_rate"] > 0:
+                        tags += f"  ·  {d['interest_rate']:.2f}% APR"
+                    if d["minimum_payment"] > 0:
+                        tags += f"  ·  Min payment: ${d['minimum_payment']:,.2f}"
+                    st.caption(tags)
+                    if d["description"]:
+                        st.caption(d["description"])
+                    st.progress(pct / 100)
+                    st.markdown(
+                        f"**${d['current_balance']:,.2f}** remaining of **${d['original_amount']:,.2f}** "
+                        f"— {pct:.1f}% paid off — **${paid:,.2f}** paid"
+                    )
+                with col2:
+                    st.markdown("**Log a Payment**")
+                    payment_amt = st.number_input(
+                        "Payment ($)",
+                        min_value=0.01,
+                        max_value=float(d["current_balance"]) if d["current_balance"] > 0 else 0.01,
+                        step=0.01,
+                        format="%.2f",
+                        key=f"pay_{d['id']}",
+                    )
+                    if st.button("💾 Apply", key=f"btn_pay_{d['id']}"):
+                        new_balance = max(d["current_balance"] - payment_amt, 0.0)
+                        db.update_debt_balance(d["id"], new_balance)
+                        st.success(f"Payment of ${payment_amt:,.2f} applied.")
+                        st.rerun()
+                st.markdown("---")
+
+        # --- summary chart -------------------------------------------------
+        if len(debts) > 1:
+            bar_data = [
+                {"Debt": d["name"], "Remaining ($)": d["current_balance"]}
+                for d in debts
+            ]
+            fig_debt = px.bar(
+                bar_data,
+                x="Debt",
+                y="Remaining ($)",
+                color="Debt",
+                title="Remaining Balance by Debt",
+            )
+            fig_debt.update_layout(showlegend=False, height=300, margin=dict(t=40, b=0))
+            st.plotly_chart(fig_debt, use_container_width=True)
+
+        st.markdown("---")
+        del_id = st.number_input("Delete debt by ID", min_value=1, step=1, key="del_debt")
+        if st.button("🗑 Delete Debt"):
+            db.delete_debt(int(del_id))
+            st.success("Debt deleted.")
+            st.rerun()
+    else:
+        st.info("No debts recorded yet.")
 
 
 # ===========================================================================

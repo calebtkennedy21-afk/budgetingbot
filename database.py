@@ -159,6 +159,20 @@ def init_db() -> None:
                                     DEFAULT to_char(now(), 'YYYY-MM-DD HH24:MI:SS')
                     )
                 """)
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS debts (
+                        id               SERIAL PRIMARY KEY,
+                        name             TEXT   NOT NULL,
+                        original_amount  REAL   NOT NULL CHECK(original_amount > 0),
+                        current_balance  REAL   NOT NULL CHECK(current_balance >= 0),
+                        interest_rate    REAL   NOT NULL DEFAULT 0 CHECK(interest_rate >= 0),
+                        minimum_payment  REAL   NOT NULL DEFAULT 0 CHECK(minimum_payment >= 0),
+                        category         TEXT   NOT NULL DEFAULT 'Other',
+                        description      TEXT,
+                        created_at       TEXT   NOT NULL
+                                         DEFAULT to_char(now(), 'YYYY-MM-DD HH24:MI:SS')
+                    )
+                """)
             conn.commit()
         finally:
             conn.close()
@@ -214,6 +228,18 @@ def init_db() -> None:
                 type        TEXT    NOT NULL CHECK(type IN ('deposit','withdrawal')),
                 description TEXT,
                 created_at  TEXT    NOT NULL DEFAULT (datetime('now'))
+            );
+
+            CREATE TABLE IF NOT EXISTS debts (
+                id               INTEGER PRIMARY KEY AUTOINCREMENT,
+                name             TEXT    NOT NULL,
+                original_amount  REAL    NOT NULL CHECK(original_amount > 0),
+                current_balance  REAL    NOT NULL CHECK(current_balance >= 0),
+                interest_rate    REAL    NOT NULL DEFAULT 0 CHECK(interest_rate >= 0),
+                minimum_payment  REAL    NOT NULL DEFAULT 0 CHECK(minimum_payment >= 0),
+                category         TEXT    NOT NULL DEFAULT 'Other',
+                description      TEXT,
+                created_at       TEXT    NOT NULL DEFAULT (datetime('now'))
             );
         """)
         conn.commit()
@@ -404,6 +430,58 @@ def get_all_savings_balances() -> dict:
 
 def delete_savings_transaction(record_id: int) -> None:
     _write("DELETE FROM savings_transactions WHERE id = %s", (record_id,))
+
+
+# ---------------------------------------------------------------------------
+# Debts
+# ---------------------------------------------------------------------------
+
+DEBT_CATEGORIES = [
+    "Credit Card",
+    "Student Loan",
+    "Car Loan",
+    "Mortgage",
+    "Personal Loan",
+    "Medical",
+    "Other",
+]
+
+
+def add_debt(
+    name: str,
+    original_amount: float,
+    current_balance: float,
+    interest_rate: float = 0.0,
+    minimum_payment: float = 0.0,
+    category: str = "Other",
+    description: str = "",
+) -> None:
+    _write(
+        """INSERT INTO debts
+           (name, original_amount, current_balance, interest_rate, minimum_payment, category, description)
+           VALUES (%s, %s, %s, %s, %s, %s, %s)""",
+        (name, original_amount, current_balance, interest_rate, minimum_payment, category, description),
+    )
+
+
+def get_debts():
+    return _read("SELECT * FROM debts ORDER BY name")
+
+
+def update_debt_balance(record_id: int, new_balance: float) -> None:
+    _write(
+        "UPDATE debts SET current_balance = %s WHERE id = %s",
+        (new_balance, record_id),
+    )
+
+
+def delete_debt(record_id: int) -> None:
+    _write("DELETE FROM debts WHERE id = %s", (record_id,))
+
+
+def get_total_debt() -> float:
+    rows = _read("SELECT current_balance FROM debts")
+    return sum(r["current_balance"] for r in rows)
 
 
 # ---------------------------------------------------------------------------
