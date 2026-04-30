@@ -1167,20 +1167,25 @@ elif page == "📈 Reports":
                 max_debt = 100 - pct_savings
                 pct_debt = st.slider("Debt Paydown %", 0, max_debt, min(30, max_debt), 5, key="alloc_debt")
             with col_g:
-                pct_goals = 100 - pct_savings - pct_debt
-                st.metric("Financial Goals %", f"{pct_goals}%")
+                max_goals = 100 - pct_savings - pct_debt
+                pct_goals = st.slider("Financial Goals %", 0, max_goals, min(20, max_goals), 5, key="alloc_goals")
+
+            pct_unallocated = 100 - pct_savings - pct_debt - pct_goals
 
             amt_savings = net * pct_savings / 100
             amt_debt    = net * pct_debt / 100
             amt_goals   = net * pct_goals / 100
+            amt_unallocated = net * pct_unallocated / 100
 
-            a1, a2, a3 = st.columns(3)
+            a1, a2, a3, a4 = st.columns(4)
             with a1:
                 st.metric("💵 Into Savings", f"${amt_savings:,.2f}", f"{pct_savings}%")
             with a2:
                 st.metric("💳 Debt Paydown", f"${amt_debt:,.2f}", f"{pct_debt}%")
             with a3:
                 st.metric("🎯 Financial Goals", f"${amt_goals:,.2f}", f"{pct_goals}%")
+            with a4:
+                st.metric("➕ Unallocated Net Positive", f"${amt_unallocated:,.2f}", f"{pct_unallocated}%")
 
             # context: how far does each bucket go?
             hints = []
@@ -1208,12 +1213,12 @@ elif page == "📈 Reports":
                     st.info(hint)
 
             # donut chart of the split
-            if pct_savings + pct_debt + pct_goals > 0:
+            if pct_savings + pct_debt + pct_goals + pct_unallocated > 0:
                 fig_alloc = px.pie(
-                    names=["Savings", "Debt Paydown", "Financial Goals"],
-                    values=[amt_savings, amt_debt, amt_goals],
+                    names=["Savings", "Debt Paydown", "Financial Goals", "Unallocated"],
+                    values=[amt_savings, amt_debt, amt_goals, amt_unallocated],
                     hole=0.5,
-                    color_discrete_sequence=["#00CC96", "#EF553B", "#636EFA"],
+                    color_discrete_sequence=["#00CC96", "#EF553B", "#636EFA", "#A3A3A3"],
                 )
                 fig_alloc.update_layout(height=280, margin=dict(t=10, b=0))
                 st.plotly_chart(fig_alloc, use_container_width=True)
