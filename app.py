@@ -1151,6 +1151,73 @@ elif page == "📈 Reports":
         }
         st.table(pd.DataFrame(summary_data))
 
+        # --- surplus allocation suggestions (only when net positive) --------
+        if net > 0:
+            st.markdown("---")
+            st.subheader("💡 Surplus Allocation Suggestions")
+            st.caption(
+                f"You have a surplus of **${net:,.2f}** this month. "
+                "Adjust the sliders to see how different splits would look."
+            )
+
+            col_s, col_d, col_g = st.columns(3)
+            with col_s:
+                pct_savings = st.slider("Savings %", 0, 100, 50, 5, key="alloc_savings")
+            with col_d:
+                max_debt = 100 - pct_savings
+                pct_debt = st.slider("Debt Paydown %", 0, max_debt, min(30, max_debt), 5, key="alloc_debt")
+            with col_g:
+                pct_goals = 100 - pct_savings - pct_debt
+                st.metric("Financial Goals %", f"{pct_goals}%")
+
+            amt_savings = net * pct_savings / 100
+            amt_debt    = net * pct_debt / 100
+            amt_goals   = net * pct_goals / 100
+
+            a1, a2, a3 = st.columns(3)
+            with a1:
+                st.metric("💵 Into Savings", f"${amt_savings:,.2f}", f"{pct_savings}%")
+            with a2:
+                st.metric("💳 Debt Paydown", f"${amt_debt:,.2f}", f"{pct_debt}%")
+            with a3:
+                st.metric("🎯 Financial Goals", f"${amt_goals:,.2f}", f"{pct_goals}%")
+
+            # context: how far does each bucket go?
+            hints = []
+            report_debts_hint = db.get_debts()
+            total_debt_hint = sum(d["current_balance"] for d in report_debts_hint)
+            if amt_debt > 0 and total_debt_hint > 0:
+                months_to_clear = total_debt_hint / amt_debt
+                hints.append(f"At this rate you'd clear all debt in roughly **{months_to_clear:.1f} months**.")
+
+            goals_hint = db.get_financial_goals()
+            total_goals_remaining = sum(
+                max(g["target_amount"] - g["current_amount"], 0) for g in goals_hint
+            )
+            if amt_goals > 0 and total_goals_remaining > 0:
+                months_to_goals = total_goals_remaining / amt_goals
+                hints.append(f"Your financial goals would be fully funded in roughly **{months_to_goals:.1f} months**.")
+
+            savings_balances_hint = db.get_all_savings_balances()
+            total_savings_hint = sum(savings_balances_hint.values())
+            if amt_savings > 0:
+                hints.append(f"Your savings balance would grow to **${total_savings_hint + amt_savings:,.2f}** after this month.")
+
+            if hints:
+                for hint in hints:
+                    st.info(hint)
+
+            # donut chart of the split
+            if pct_savings + pct_debt + pct_goals > 0:
+                fig_alloc = px.pie(
+                    names=["Savings", "Debt Paydown", "Financial Goals"],
+                    values=[amt_savings, amt_debt, amt_goals],
+                    hole=0.5,
+                    color_discrete_sequence=["#00CC96", "#EF553B", "#636EFA"],
+                )
+                fig_alloc.update_layout(height=280, margin=dict(t=10, b=0))
+                st.plotly_chart(fig_alloc, use_container_width=True)
+
         # --- debt overview (informational only, not included in net) --------
         report_debts = db.get_debts()
         if report_debts:
