@@ -849,6 +849,9 @@ elif page == "💳 Debt":
                 debt_min = st.number_input(
                     "Minimum Payment ($)", min_value=0.0, step=0.01, format="%.2f"
                 )
+                debt_due = st.date_input(
+                    "Minimum Payment Due Date (optional)", value=None
+                )
                 debt_desc = st.text_input("Description (optional)")
             submitted = st.form_submit_button("Add Debt")
             if submitted:
@@ -865,6 +868,7 @@ elif page == "💳 Debt":
                         debt_balance,
                         debt_rate,
                         debt_min,
+                        str(debt_due) if debt_due else None,
                         debt_cat,
                         debt_desc,
                     )
@@ -886,6 +890,8 @@ elif page == "💳 Debt":
                         tags += f"  ·  {d['interest_rate']:.2f}% APR"
                     if d["minimum_payment"] > 0:
                         tags += f"  ·  Min payment: ${d['minimum_payment']:,.2f}"
+                    if d.get("minimum_payment_date"):
+                        tags += f"  ·  Due: {d['minimum_payment_date']}"
                     st.caption(tags)
                     if d["description"]:
                         st.caption(d["description"])

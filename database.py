@@ -161,17 +161,24 @@ def init_db() -> None:
                 """)
                 cur.execute("""
                     CREATE TABLE IF NOT EXISTS debts (
-                        id               SERIAL PRIMARY KEY,
-                        name             TEXT   NOT NULL,
-                        original_amount  REAL   NOT NULL CHECK(original_amount > 0),
-                        current_balance  REAL   NOT NULL CHECK(current_balance >= 0),
-                        interest_rate    REAL   NOT NULL DEFAULT 0 CHECK(interest_rate >= 0),
-                        minimum_payment  REAL   NOT NULL DEFAULT 0 CHECK(minimum_payment >= 0),
-                        category         TEXT   NOT NULL DEFAULT 'Other',
-                        description      TEXT,
-                        created_at       TEXT   NOT NULL
-                                         DEFAULT to_char(now(), 'YYYY-MM-DD HH24:MI:SS')
+                        id                    SERIAL PRIMARY KEY,
+                        name                  TEXT   NOT NULL,
+                        original_amount       REAL   NOT NULL CHECK(original_amount > 0),
+                        current_balance       REAL   NOT NULL CHECK(current_balance >= 0),
+                        interest_rate         REAL   NOT NULL DEFAULT 0 CHECK(interest_rate >= 0),
+                        minimum_payment       REAL   NOT NULL DEFAULT 0 CHECK(minimum_payment >= 0),
+                        minimum_payment_date  TEXT,
+                        category              TEXT   NOT NULL DEFAULT 'Other',
+                        description           TEXT,
+                        created_at            TEXT   NOT NULL
+                                              DEFAULT to_char(now(), 'YYYY-MM-DD HH24:MI:SS')
                     )
+                """)
+            conn.commit()
+            # Migration: add minimum_payment_date if it doesn't exist yet
+            with conn.cursor() as cur:
+                cur.execute("""
+                    ALTER TABLE debts ADD COLUMN IF NOT EXISTS minimum_payment_date TEXT
                 """)
             conn.commit()
         finally:
@@ -231,18 +238,24 @@ def init_db() -> None:
             );
 
             CREATE TABLE IF NOT EXISTS debts (
-                id               INTEGER PRIMARY KEY AUTOINCREMENT,
-                name             TEXT    NOT NULL,
-                original_amount  REAL    NOT NULL CHECK(original_amount > 0),
-                current_balance  REAL    NOT NULL CHECK(current_balance >= 0),
-                interest_rate    REAL    NOT NULL DEFAULT 0 CHECK(interest_rate >= 0),
-                minimum_payment  REAL    NOT NULL DEFAULT 0 CHECK(minimum_payment >= 0),
-                category         TEXT    NOT NULL DEFAULT 'Other',
-                description      TEXT,
-                created_at       TEXT    NOT NULL DEFAULT (datetime('now'))
+                id                    INTEGER PRIMARY KEY AUTOINCREMENT,
+                name                  TEXT    NOT NULL,
+                original_amount       REAL    NOT NULL CHECK(original_amount > 0),
+                current_balance       REAL    NOT NULL CHECK(current_balance >= 0),
+                interest_rate         REAL    NOT NULL DEFAULT 0 CHECK(interest_rate >= 0),
+                minimum_payment       REAL    NOT NULL DEFAULT 0 CHECK(minimum_payment >= 0),
+                minimum_payment_date  TEXT,
+                category              TEXT    NOT NULL DEFAULT 'Other',
+                description           TEXT,
+                created_at            TEXT    NOT NULL DEFAULT (datetime('now'))
             );
         """)
         conn.commit()
+        # Migration: add minimum_payment_date if it doesn't exist yet
+        cols = [row[1] for row in conn.execute("PRAGMA table_info(debts)").fetchall()]
+        if "minimum_payment_date" not in cols:
+            conn.execute("ALTER TABLE debts ADD COLUMN minimum_payment_date TEXT")
+            conn.commit()
         conn.close()
 
 
@@ -453,14 +466,15 @@ def add_debt(
     current_balance: float,
     interest_rate: float = 0.0,
     minimum_payment: float = 0.0,
+    minimum_payment_date: str = None,
     category: str = "Other",
     description: str = "",
 ) -> None:
     _write(
         """INSERT INTO debts
-           (name, original_amount, current_balance, interest_rate, minimum_payment, category, description)
-           VALUES (%s, %s, %s, %s, %s, %s, %s)""",
-        (name, original_amount, current_balance, interest_rate, minimum_payment, category, description),
+           (name, original_amount, current_balance, interest_rate, minimum_payment, minimum_payment_date, category, description)
+           VALUES (%s, %s, %s, %s, %s, %s, %s, %s)""",
+        (name, original_amount, current_balance, interest_rate, minimum_payment, minimum_payment_date, category, description),
     )
 
 
