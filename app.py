@@ -532,10 +532,18 @@ elif page == "💰 Income":
     kpi_cols = st.columns(len(INCOME_SOURCES) + 1)
     for i, src in enumerate(INCOME_SOURCES):
         with kpi_cols[i]:
-            st.metric(src, f"${sum(r['amount'] for r in month_by_src.get(src, [])):,.2f}",
-                      help=f"{MONTHS[sel_month]} {sel_year}")
+            src_mo = sum(r['amount'] for r in month_by_src.get(src, []))
+            st.markdown(
+                f"<div style='font-size:0.75rem;color:gray;margin-bottom:2px'>{src} — {MONTHS[sel_month]}</div>"
+                f"<div style='font-size:1rem;font-weight:600'>${src_mo:,.2f}</div>",
+                unsafe_allow_html=True,
+            )
     with kpi_cols[-1]:
-        st.metric("Total This Month", f"${total_month:,.2f}")
+        st.markdown(
+            f"<div style='font-size:0.75rem;color:gray;margin-bottom:2px'>Total This Month</div>"
+            f"<div style='font-size:1rem;font-weight:600'>${total_month:,.2f}</div>",
+            unsafe_allow_html=True,
+        )
 
     st.markdown("---")
 
@@ -552,9 +560,17 @@ elif page == "💰 Income":
                 st.subheader(source)
                 m1, m2 = st.columns(2)
                 with m1:
-                    st.metric(f"{MONTHS[sel_month]}", f"${month_total:,.2f}")
+                    st.markdown(
+                        f"<div style='font-size:0.72rem;color:gray;margin-bottom:2px'>{MONTHS[sel_month]}</div>"
+                        f"<div style='font-size:0.95rem;font-weight:600'>${month_total:,.2f}</div>",
+                        unsafe_allow_html=True,
+                    )
                 with m2:
-                    st.metric(f"{sel_year} Total", f"${year_total:,.2f}")
+                    st.markdown(
+                        f"<div style='font-size:0.72rem;color:gray;margin-bottom:2px'>{sel_year} Total</div>"
+                        f"<div style='font-size:0.95rem;font-weight:600'>${year_total:,.2f}</div>",
+                        unsafe_allow_html=True,
+                    )
 
                 st.markdown("**Add Income**")
                 with st.form(f"income_form_{col_idx}", clear_on_submit=True):
