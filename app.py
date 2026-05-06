@@ -921,13 +921,13 @@ elif page == "🛒 Variable Expenses":
                         for expense in df_tab.sort_values("date", ascending=False).to_dict("records"):
                             row_label = f"{expense['date']} • ${expense['amount']:,.2f} • {expense['category']}"
                             with st.expander(row_label):
-                                with st.form(f"edit_var_{int(expense['id'])}"):
+                                with st.form(f"edit_var_{idx}_{int(expense['id'])}"):
                                     edit_c1, edit_c2 = st.columns(2)
                                     with edit_c1:
                                         edit_date = st.date_input(
                                             "Date",
                                             value=date.fromisoformat(str(expense["date"])),
-                                            key=f"edit_var_date_{int(expense['id'])}",
+                                            key=f"edit_var_date_{idx}_{int(expense['id'])}",
                                         )
                                         edit_amount = st.number_input(
                                             "Amount ($)",
@@ -935,7 +935,7 @@ elif page == "🛒 Variable Expenses":
                                             step=0.01,
                                             format="%.2f",
                                             value=float(expense["amount"]),
-                                            key=f"edit_var_amt_{int(expense['id'])}",
+                                            key=f"edit_var_amt_{idx}_{int(expense['id'])}",
                                         )
                                     with edit_c2:
                                         current_cat = str(expense["category"])
@@ -946,12 +946,12 @@ elif page == "🛒 Variable Expenses":
                                             "Category",
                                             edit_cat_options,
                                             index=edit_cat_options.index(current_cat),
-                                            key=f"edit_var_cat_{int(expense['id'])}",
+                                            key=f"edit_var_cat_{idx}_{int(expense['id'])}",
                                         )
                                         edit_desc = st.text_input(
                                             "Description (optional)",
                                             value=expense.get("description") or "",
-                                            key=f"edit_var_desc_{int(expense['id'])}",
+                                            key=f"edit_var_desc_{idx}_{int(expense['id'])}",
                                         )
 
                                     act_c1, act_c2 = st.columns(2)
