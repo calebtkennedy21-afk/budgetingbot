@@ -568,9 +568,15 @@ elif page == "📌 Fixed Expenses":
 
     show_active = st.checkbox("Show active only", value=True)
     rows = db.get_fixed_expenses(active_only=show_active)
+    all_fixed_rows = db.get_fixed_expenses(active_only=False)
     debts_for_link = db.get_debts()
     debt_options = {f"{d['name']} (ID {d['id']})": d["id"] for d in debts_for_link}
     debt_id_to_label = {d["id"]: f"{d['name']} (ID {d['id']})" for d in debts_for_link}
+    linked_debt_owner = {
+        int(row["linked_debt_id"]): int(row["id"])
+        for row in all_fixed_rows
+        if row.get("linked_debt_id") is not None
+    }
     extra_categories = sorted({row["category"] for row in rows if row["category"] not in FIXED_EXPENSE_CATEGORIES})
     category_options = FIXED_EXPENSE_CATEGORIES + extra_categories
     rows_by_category = {category: [] for category in category_options}
@@ -712,18 +718,26 @@ elif page == "📌 Fixed Expenses":
 
                                 selected_debt_label = "Not linked"
                                 if debts_for_link:
-                                    debt_labels = ["Not linked", *debt_options.keys()]
+                                    available_debt_options = {
+                                        label: debt_id
+                                        for label, debt_id in debt_options.items()
+                                        if linked_debt_owner.get(int(debt_id)) in (None, int(expense["id"]))
+                                    }
+                                    debt_labels = ["Not linked", *available_debt_options.keys()]
                                     current_debt_label = (
                                         debt_id_to_label.get(int(expense["linked_debt_id"]), "Not linked")
                                         if expense.get("linked_debt_id") is not None
                                         else "Not linked"
                                     )
-                                    selected_debt_label = st.selectbox(
-                                        "Linked Debt",
-                                        debt_labels,
-                                        index=debt_labels.index(current_debt_label),
-                                        key=f"edit_fix_debt_{expense['id']}",
-                                    )
+                                    if len(debt_labels) > 1:
+                                        selected_debt_label = st.selectbox(
+                                            "Linked Debt",
+                                            debt_labels,
+                                            index=debt_labels.index(current_debt_label),
+                                            key=f"edit_fix_debt_{expense['id']}",
+                                        )
+                                    else:
+                                        st.caption("No available debts to link. Unlink an existing debt first.")
 
                                 action_col1, action_col2 = st.columns(2)
                                 with action_col1:
@@ -750,10 +764,10 @@ elif page == "📌 Fixed Expenses":
                                         if debts_for_link:
                                             if selected_debt_label == "Not linked":
                                                 db.unlink_fixed_expense_from_debt(int(expense["id"]))
-                                            else:
+                                            elif selected_debt_label in available_debt_options:
                                                 db.link_fixed_expense_to_debt(
                                                     int(expense["id"]),
-                                                    debt_options[selected_debt_label],
+                                                    available_debt_options[selected_debt_label],
                                                 )
                                         st.success(f"Updated {edit_name.strip()}.")
                                         st.rerun()
@@ -1011,76 +1025,116 @@ elif page == "💳 Debt":
                     st.success(f"✅ Added debt: {debt_name}")
                     st.rerun()
 
-    # --- debt list with progress bars --------------------------------------
     if debts:
         st.subheader("Your Debts")
-        for d in debts:
+        debt_columns = st.columns(2)
+        for idx, d in enumerate(debts):
             paid = d["original_amount"] - d["current_balance"]
             pct = min(paid / d["original_amount"] * 100, 100) if d["original_amount"] > 0 else 0
-            with st.container():
-                col1, col2 = st.columns([3, 1])
-                with col1:
-                    st.markdown(f"### {d['name']} (ID: {d['id']})")
-                    tags = f"**{d['category']}**"
+            linked_fes = db.get_linked_fixed_expenses(d["id"])
+            with debt_columns[idx % 2]:
+                with st.container(border=True):
+                    st.markdown(f"### {d['name']}")
+                    tags = f"{d['category']} · ID {d['id']}"
                     if d["interest_rate"] > 0:
-                        tags += f"  ·  {d['interest_rate']:.2f}% APR"
+                        tags += f" · {d['interest_rate']:.2f}% APR"
                     if d["minimum_payment"] > 0:
-                        tags += f"  ·  Min payment: ${d['minimum_payment']:,.2f}"
+                        tags += f" · Min payment: ${d['minimum_payment']:,.2f}"
                     if d.get("minimum_payment_date"):
-                        tags += f"  ·  Due: {d['minimum_payment_date']}"
+                        tags += f" · Due: {d['minimum_payment_date']}"
                     st.caption(tags)
                     if d["description"]:
                         st.caption(d["description"])
-                    st.progress(pct / 100)
-                    st.markdown(
-                        f"**${d['current_balance']:,.2f}** remaining of **${d['original_amount']:,.2f}** "
-                        f"— {pct:.1f}% paid off — **${paid:,.2f}** paid"
-                    )
-                with col2:
-                    st.markdown("**Log a Payment**")
-                    payment_amt = st.number_input(
-                        "Payment ($)",
-                        min_value=0.01,
-                        max_value=float(d["current_balance"]) if d["current_balance"] > 0 else 0.01,
-                        step=0.01,
-                        format="%.2f",
-                        key=f"pay_{d['id']}",
-                    )
-                    if st.button("💾 Apply", key=f"btn_pay_{d['id']}"):
-                        new_balance = max(d["current_balance"] - payment_amt, 0.0)
-                        db.update_debt_balance(d["id"], new_balance)
-                        st.success(f"Payment of ${payment_amt:,.2f} applied.")
-                        st.rerun()
 
-                    # --- linked fixed expense payments ---------------------
-                    linked_fes = db.get_linked_fixed_expenses(d["id"])
+                    metric_cols = st.columns(3)
+                    with metric_cols[0]:
+                        st.metric("Remaining", f"${d['current_balance']:,.2f}")
+                    with metric_cols[1]:
+                        st.metric("Original", f"${d['original_amount']:,.2f}")
+                    with metric_cols[2]:
+                        st.metric("Paid", f"${paid:,.2f}")
+
+                    st.progress(pct / 100)
+                    st.caption(f"{pct:.1f}% paid off")
+
+                    payment_disabled = d["current_balance"] <= 0
+                    with st.form(f"debt_payment_form_{d['id']}"):
+                        payment_amt = st.number_input(
+                            "Manual Payment ($)",
+                            min_value=0.01,
+                            max_value=float(d["current_balance"]) if d["current_balance"] > 0 else 0.01,
+                            step=0.01,
+                            format="%.2f",
+                            value=min(float(d["minimum_payment"]), float(d["current_balance"]))
+                            if d["minimum_payment"] > 0 and d["current_balance"] > 0
+                            else 0.01,
+                            key=f"pay_{d['id']}",
+                        )
+                        apply_manual_payment = st.form_submit_button(
+                            "Apply Manual Payment",
+                            use_container_width=True,
+                            disabled=payment_disabled,
+                        )
+                        if apply_manual_payment:
+                            if payment_amt > d["current_balance"]:
+                                st.error("Payment exceeds remaining balance.")
+                            else:
+                                new_balance = max(d["current_balance"] - payment_amt, 0.0)
+                                db.update_debt_balance(d["id"], new_balance)
+                                st.success(f"Payment of ${payment_amt:,.2f} applied.")
+                                st.rerun()
+
+                    if payment_disabled:
+                        st.caption("This debt is fully paid off.")
+
+                    st.markdown("**Linked Fixed Expenses**")
                     if linked_fes:
-                        st.markdown("**Linked Payments**")
                         for fe in linked_fes:
                             already_applied = db.is_debt_payment_applied(
                                 d["id"], fe["id"], sel_year, sel_month
                             )
-                            label = f"📌 {fe['name']} (${fe['amount']:,.2f})"
-                            if already_applied:
-                                st.caption(f"✅ {MONTHS[sel_month]} {sel_year} applied")
-                            else:
+                            info_col, action_col = st.columns([3, 1])
+                            with info_col:
+                                st.markdown(
+                                    f"**{fe['name']}**  \n${fe['amount']:,.2f} · {fe['frequency'].title()}"
+                                )
+                                if fe.get("description"):
+                                    st.caption(fe["description"])
+                            with action_col:
+                                if already_applied:
+                                    st.caption(f"Applied for {MONTHS[sel_month]}")
+                                else:
+                                    if st.button(
+                                        f"Apply {MONTHS[sel_month]}",
+                                        key=f"auto_pay_{d['id']}_{fe['id']}",
+                                        use_container_width=True,
+                                        disabled=payment_disabled,
+                                    ):
+                                        if fe["amount"] > d["current_balance"]:
+                                            st.error("Payment exceeds remaining balance.")
+                                        else:
+                                            db.apply_debt_payment(
+                                                d["id"], fe["id"], sel_year, sel_month, fe["amount"]
+                                            )
+                                            st.success(
+                                                f"Applied ${fe['amount']:,.2f} from '{fe['name']}' for {MONTHS[sel_month]} {sel_year}."
+                                            )
+                                            st.rerun()
                                 if st.button(
-                                    f"Apply {MONTHS[sel_month]} payment",
-                                    key=f"auto_pay_{d['id']}_{fe['id']}",
-                                    help=label,
+                                    "Unlink",
+                                    key=f"unlink_fe_{d['id']}_{fe['id']}",
+                                    use_container_width=True,
                                 ):
-                                    if fe["amount"] > d["current_balance"]:
-                                        st.error("Payment exceeds remaining balance.")
-                                    else:
-                                        db.apply_debt_payment(
-                                            d["id"], fe["id"], sel_year, sel_month, fe["amount"]
-                                        )
-                                        st.success(
-                                            f"✅ Applied ${fe['amount']:,.2f} from '{fe['name']}' "
-                                            f"for {MONTHS[sel_month]} {sel_year}."
-                                        )
-                                        st.rerun()
-                st.markdown("---")
+                                    db.unlink_fixed_expense_from_debt(int(fe["id"]))
+                                    st.success(f"Unlinked '{fe['name']}' from {d['name']}.")
+                                    st.rerun()
+                    else:
+                        st.caption("No fixed expenses linked to this debt.")
+
+                    if st.button("Delete Debt", key=f"delete_debt_{d['id']}", use_container_width=True):
+                        db.delete_debt(int(d["id"]))
+                        st.success(f"Deleted {d['name']}.")
+                        st.rerun()
 
         # --- summary chart -------------------------------------------------
         if len(debts) > 1:
@@ -1097,13 +1151,6 @@ elif page == "💳 Debt":
             )
             fig_debt.update_layout(showlegend=False, height=300, margin=dict(t=40, b=0))
             st.plotly_chart(fig_debt, use_container_width=True)
-
-        st.markdown("---")
-        del_id = st.number_input("Delete debt by ID", min_value=1, step=1, key="del_debt")
-        if st.button("🗑 Delete Debt"):
-            db.delete_debt(int(del_id))
-            st.success("Debt deleted.")
-            st.rerun()
     else:
         st.info("No debts recorded yet.")
 
