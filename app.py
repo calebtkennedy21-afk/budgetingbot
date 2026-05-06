@@ -1187,20 +1187,59 @@ elif page == "💵 Savings":
                         df_show["Amount ($)"] = df_show["Amount ($)"].map(lambda x: f"{x:,.2f}")
                         st.dataframe(df_show, width="stretch", hide_index=True)
 
-                    del_col1, del_col2 = st.columns([3, 1])
-                    with del_col1:
-                        del_id = st.number_input(
-                            "Delete transaction by ID",
-                            min_value=1,
-                            step=1,
-                            key=f"del_sav_{tab_label}",
+                    st.caption("Edit / Delete Transactions")
+                    for row_idx, row in enumerate(rows):
+                        sign = "+" if row["type"] == "deposit" else "-"
+                        exp_label = (
+                            f"{row['date']} · {row.get('account', tab_label)} · "
+                            f"{sign}${row['amount']:,.2f}"
                         )
-                    with del_col2:
-                        st.write(" ")
-                        if st.button("Delete", key=f"btn_del_sav_{tab_label}", width="stretch"):
-                            db.delete_savings_transaction(int(del_id))
-                            st.success("Transaction deleted.")
-                            st.rerun()
+                        with st.expander(exp_label, expanded=False):
+                            with st.form(f"edit_sav_{idx}_{row_idx}_{row['id']}"):
+                                f1, f2 = st.columns(2)
+                                with f1:
+                                    e_acct = st.selectbox(
+                                        "Account", SAVINGS_ACCOUNTS,
+                                        index=SAVINGS_ACCOUNTS.index(row["account"]) if row["account"] in SAVINGS_ACCOUNTS else 0,
+                                        key=f"es_acct_{idx}_{row_idx}_{row['id']}",
+                                    )
+                                    e_type = st.selectbox(
+                                        "Type", ["deposit", "withdrawal"],
+                                        index=0 if row["type"] == "deposit" else 1,
+                                        key=f"es_type_{idx}_{row_idx}_{row['id']}",
+                                    )
+                                with f2:
+                                    e_date = st.date_input(
+                                        "Date",
+                                        value=date.fromisoformat(str(row["date"])),
+                                        key=f"es_date_{idx}_{row_idx}_{row['id']}",
+                                    )
+                                    e_amount = st.number_input(
+                                        "Amount ($)", min_value=0.01, step=0.01,
+                                        format="%.2f", value=float(row["amount"]),
+                                        key=f"es_amt_{idx}_{row_idx}_{row['id']}",
+                                    )
+                                e_desc = st.text_input(
+                                    "Description (optional)",
+                                    value=row.get("description") or "",
+                                    key=f"es_desc_{idx}_{row_idx}_{row['id']}",
+                                )
+                                ac1, ac2 = st.columns(2)
+                                with ac1:
+                                    save_it = st.form_submit_button("Save", width="stretch")
+                                with ac2:
+                                    del_it = st.form_submit_button("Delete", width="stretch")
+                                if save_it:
+                                    db.update_savings_transaction(
+                                        int(row["id"]), e_acct, str(e_date),
+                                        float(e_amount), e_type, e_desc,
+                                    )
+                                    st.success("Transaction updated.")
+                                    st.rerun()
+                                if del_it:
+                                    db.delete_savings_transaction(int(row["id"]))
+                                    st.success("Transaction deleted.")
+                                    st.rerun()
                 else:
                     st.info("No savings transactions recorded for this view.")
 

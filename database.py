@@ -603,6 +603,22 @@ def delete_savings_transaction(record_id: int) -> None:
     _write("DELETE FROM savings_transactions WHERE id = %s", (record_id,))
 
 
+def update_savings_transaction(
+    record_id: int,
+    account: str,
+    date: str,
+    amount: float,
+    txn_type: str,
+    description: str,
+) -> None:
+    _write(
+        """UPDATE savings_transactions
+           SET account = %s, date = %s, amount = %s, type = %s, description = %s
+           WHERE id = %s""",
+        (account, date, amount, txn_type, description, record_id),
+    )
+
+
 # ---------------------------------------------------------------------------
 # Debts
 # ---------------------------------------------------------------------------
