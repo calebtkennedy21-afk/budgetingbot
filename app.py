@@ -289,6 +289,8 @@ INCOME_CATEGORIES = [
     "Other",
 ]
 
+INCOME_SOURCES = db.INCOME_SOURCES
+
 FIXED_EXPENSE_CATEGORIES = [
     "Housing",
     "Utilities",
@@ -513,47 +515,124 @@ if page == "📊 Dashboard":
 elif page == "💰 Income":
     st.title("💰 Income")
 
-    with st.expander("➕ Add Income Entry", expanded=True):
-        with st.form("income_form", clear_on_submit=True):
-            c1, c2 = st.columns(2)
-            with c1:
-                inc_date = st.date_input("Date", value=today)
-                inc_amount = st.number_input("Amount ($)", min_value=0.01, step=0.01, format="%.2f")
-            with c2:
-                inc_cat = st.selectbox("Category", INCOME_CATEGORIES)
-                inc_desc = st.text_input("Description (optional)")
-            submitted = st.form_submit_button("Add Income")
-            if submitted:
-                if inc_amount <= 0:
-                    st.error("Amount must be greater than zero.")
+    # Fetch all income for month and year across all sources
+    month_rows = db.get_income(year=sel_year, month=sel_month)
+    year_rows  = db.get_income(year=sel_year)
+
+    month_by_src = {s: [] for s in INCOME_SOURCES}
+    year_by_src  = {s: [] for s in INCOME_SOURCES}
+    for r in month_rows:
+        month_by_src.setdefault(r["source"], []).append(r)
+    for r in year_rows:
+        year_by_src.setdefault(r["source"], []).append(r)
+
+    # --- top summary strip -------------------------------------------------
+    total_month = sum(r["amount"] for r in month_rows)
+    total_year  = sum(r["amount"] for r in year_rows)
+    kpi_cols = st.columns(len(INCOME_SOURCES) + 1)
+    for i, src in enumerate(INCOME_SOURCES):
+        with kpi_cols[i]:
+            st.metric(src, f"${sum(r['amount'] for r in month_by_src.get(src, [])):,.2f}",
+                      help=f"{MONTHS[sel_month]} {sel_year}")
+    with kpi_cols[-1]:
+        st.metric("Total This Month", f"${total_month:,.2f}")
+
+    st.markdown("---")
+
+    # --- one card per income source ----------------------------------------
+    card_cols = st.columns(len(INCOME_SOURCES))
+    for col_idx, source in enumerate(INCOME_SOURCES):
+        src_month = month_by_src.get(source, [])
+        src_year  = year_by_src.get(source, [])
+        month_total = sum(r["amount"] for r in src_month)
+        year_total  = sum(r["amount"] for r in src_year)
+
+        with card_cols[col_idx]:
+            with st.container(border=True):
+                st.subheader(source)
+                m1, m2 = st.columns(2)
+                with m1:
+                    st.metric(f"{MONTHS[sel_month]}", f"${month_total:,.2f}")
+                with m2:
+                    st.metric(f"{sel_year} Total", f"${year_total:,.2f}")
+
+                st.markdown("**Add Income**")
+                with st.form(f"income_form_{col_idx}", clear_on_submit=True):
+                    inc_cat = st.selectbox("Category", INCOME_CATEGORIES,
+                                           key=f"inc_cat_{col_idx}")
+                    inc_amount = st.number_input("Amount ($)", min_value=0.01,
+                                                 step=0.01, format="%.2f",
+                                                 key=f"inc_amt_{col_idx}")
+                    inc_date = st.date_input("Date", value=today,
+                                             key=f"inc_date_{col_idx}")
+                    inc_desc = st.text_input("Description (optional)",
+                                             key=f"inc_desc_{col_idx}")
+                    submitted = st.form_submit_button("Add Income", width="stretch")
+                    if submitted:
+                        if inc_amount <= 0:
+                            st.error("Amount must be greater than zero.")
+                        else:
+                            db.add_income(str(inc_date), inc_amount, inc_cat,
+                                          source, inc_desc)
+                            st.success(f"✅ Added ${inc_amount:,.2f} to {source}.")
+                            st.rerun()
+
+                st.markdown(f"**{MONTHS[sel_month]} Entries**")
+                if src_month:
+                    for entry in sorted(src_month, key=lambda r: r["date"], reverse=True):
+                        label = f"{entry['date']} • ${entry['amount']:,.2f} • {entry['category']}"
+                        with st.expander(label):
+                            with st.form(f"edit_inc_{col_idx}_{entry['id']}"):
+                                e1, e2 = st.columns(2)
+                                with e1:
+                                    e_date = st.date_input(
+                                        "Date",
+                                        value=date.fromisoformat(str(entry["date"])),
+                                        key=f"e_inc_date_{col_idx}_{entry['id']}",
+                                    )
+                                    e_amount = st.number_input(
+                                        "Amount ($)", min_value=0.01, step=0.01,
+                                        format="%.2f", value=float(entry["amount"]),
+                                        key=f"e_inc_amt_{col_idx}_{entry['id']}",
+                                    )
+                                with e2:
+                                    cur_cat = str(entry["category"])
+                                    cat_opts = INCOME_CATEGORIES.copy()
+                                    if cur_cat not in cat_opts:
+                                        cat_opts.append(cur_cat)
+                                    e_cat = st.selectbox(
+                                        "Category", cat_opts,
+                                        index=cat_opts.index(cur_cat),
+                                        key=f"e_inc_cat_{col_idx}_{entry['id']}",
+                                    )
+                                    e_src = st.selectbox(
+                                        "Source", INCOME_SOURCES,
+                                        index=INCOME_SOURCES.index(source),
+                                        key=f"e_inc_src_{col_idx}_{entry['id']}",
+                                    )
+                                e_desc = st.text_input(
+                                    "Description (optional)",
+                                    value=entry.get("description") or "",
+                                    key=f"e_inc_desc_{col_idx}_{entry['id']}",
+                                )
+                                ac1, ac2 = st.columns(2)
+                                with ac1:
+                                    save_it = st.form_submit_button("Save", width="stretch")
+                                with ac2:
+                                    del_it = st.form_submit_button("Delete", width="stretch")
+                                if save_it:
+                                    db.update_income(
+                                        int(entry["id"]), str(e_date),
+                                        float(e_amount), e_cat, e_src, e_desc,
+                                    )
+                                    st.success("Entry updated.")
+                                    st.rerun()
+                                if del_it:
+                                    db.delete_income(int(entry["id"]))
+                                    st.success("Entry deleted.")
+                                    st.rerun()
                 else:
-                    db.add_income(
-                        str(inc_date), inc_amount, inc_cat, inc_desc
-                    )
-                    st.success(f"✅ Added ${inc_amount:,.2f} income on {inc_date}.")
-                    st.rerun()
-
-    st.subheader(f"Income — {MONTHS[sel_month]} {sel_year}")
-    rows = db.get_income(year=sel_year, month=sel_month)
-    if rows:
-        df = _to_df(rows)
-        df_show = df[["date", "amount", "category", "description"]].copy()
-        df_show.columns = ["Date", "Amount ($)", "Category", "Description"]
-        df_show["Amount ($)"] = df_show["Amount ($)"].map(lambda x: f"{x:,.2f}")
-        st.dataframe(df_show, width="stretch", hide_index=True)
-
-        total = sum(r["amount"] for r in rows)
-        st.markdown(f"**Total: ${total:,.2f}**")
-
-        del_id = st.number_input(
-            "Delete entry by ID", min_value=1, step=1, key="del_income"
-        )
-        if st.button("🗑 Delete Income Entry"):
-            db.delete_income(int(del_id))
-            st.success("Entry deleted.")
-            st.rerun()
-    else:
-        st.info("No income entries for this period.")
+                    st.caption(f"No income recorded for {MONTHS[sel_month]}.")
 
 
 # ===========================================================================

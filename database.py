@@ -103,6 +103,7 @@ def init_db() -> None:
                         date        TEXT   NOT NULL,
                         amount      REAL   NOT NULL CHECK(amount > 0),
                         category    TEXT   NOT NULL DEFAULT 'General',
+                        source      TEXT   NOT NULL DEFAULT 'Caleb',
                         description TEXT,
                         created_at  TEXT   NOT NULL
                                     DEFAULT to_char(now(), 'YYYY-MM-DD HH24:MI:SS')
@@ -189,13 +190,16 @@ def init_db() -> None:
                     )
                 """)
             conn.commit()
-            # Migration: add linked_debt_id to fixed_expenses if missing
+            # Migration: add columns if missing
             with conn.cursor() as cur:
                 cur.execute("""
                     ALTER TABLE fixed_expenses ADD COLUMN IF NOT EXISTS linked_debt_id INTEGER
                 """)
                 cur.execute("""
                     ALTER TABLE debts ADD COLUMN IF NOT EXISTS minimum_payment_date TEXT
+                """)
+                cur.execute("""
+                    ALTER TABLE income ADD COLUMN IF NOT EXISTS source TEXT NOT NULL DEFAULT 'Caleb'
                 """)
             conn.commit()
         finally:
@@ -208,6 +212,7 @@ def init_db() -> None:
                 date        TEXT    NOT NULL,
                 amount      REAL    NOT NULL CHECK(amount > 0),
                 category    TEXT    NOT NULL DEFAULT 'General',
+                source      TEXT    NOT NULL DEFAULT 'Caleb',
                 description TEXT,
                 created_at  TEXT    NOT NULL DEFAULT (datetime('now'))
             );
@@ -289,6 +294,10 @@ def init_db() -> None:
         if "linked_debt_id" not in cols_fe:
             conn.execute("ALTER TABLE fixed_expenses ADD COLUMN linked_debt_id INTEGER")
             conn.commit()
+        cols_inc = [row[1] for row in conn.execute("PRAGMA table_info(income)").fetchall()]
+        if "source" not in cols_inc:
+            conn.execute("ALTER TABLE income ADD COLUMN source TEXT NOT NULL DEFAULT 'Caleb'")
+            conn.commit()
         conn.close()
 
 
@@ -296,10 +305,29 @@ def init_db() -> None:
 # Income
 # ---------------------------------------------------------------------------
 
-def add_income(date: str, amount: float, category: str, description: str) -> None:
+INCOME_SOURCES = ["Caleb", "Jamie", "Shared Checking"]
+
+
+def add_income(date: str, amount: float, category: str, source: str, description: str) -> None:
     _write(
-        "INSERT INTO income (date, amount, category, description) VALUES (%s, %s, %s, %s)",
-        (date, amount, category, description),
+        "INSERT INTO income (date, amount, category, source, description) VALUES (%s, %s, %s, %s, %s)",
+        (date, amount, category, source, description),
+    )
+
+
+def update_income(
+    record_id: int,
+    date: str,
+    amount: float,
+    category: str,
+    source: str,
+    description: str,
+) -> None:
+    _write(
+        """UPDATE income
+           SET date = %s, amount = %s, category = %s, source = %s, description = %s
+           WHERE id = %s""",
+        (date, amount, category, source, description, record_id),
     )
 
 
