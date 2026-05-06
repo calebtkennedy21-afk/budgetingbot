@@ -331,7 +331,7 @@ with st.sidebar:
             "<span style='color:#dc2626;'>Database: Offline</span>",
             unsafe_allow_html=True,
         )
-    if st.button("🚪 Log out", use_container_width=True):
+    if st.button("🚪 Log out", width="stretch"):
         _logout()
         st.rerun()
     st.markdown("---")
@@ -436,7 +436,7 @@ if page == "📊 Dashboard":
                 color_discrete_sequence=["#EF553B", "#636EFA"],
             )
             fig.update_layout(margin=dict(t=0, b=0, l=0, r=0), height=300)
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, width="stretch")
         else:
             st.info("No expenses recorded this month.")
 
@@ -452,7 +452,7 @@ if page == "📊 Dashboard":
         bar_fig.update_layout(
             barmode="group", margin=dict(t=0, b=0), height=300, yaxis_title="Amount ($)"
         )
-        st.plotly_chart(bar_fig, use_container_width=True)
+        st.plotly_chart(bar_fig, width="stretch")
 
     # --- variable expense by category ---------------------------------------
     if var_rows:
@@ -467,7 +467,7 @@ if page == "📊 Dashboard":
             color="category",
         )
         cat_fig.update_layout(showlegend=False, margin=dict(t=0), height=300)
-        st.plotly_chart(cat_fig, use_container_width=True)
+        st.plotly_chart(cat_fig, width="stretch")
 
     # --- goals summary ------------------------------------------------------
     if goals:
@@ -540,7 +540,7 @@ elif page == "💰 Income":
         df_show = df[["date", "amount", "category", "description"]].copy()
         df_show.columns = ["Date", "Amount ($)", "Category", "Description"]
         df_show["Amount ($)"] = df_show["Amount ($)"].map(lambda x: f"{x:,.2f}")
-        st.dataframe(df_show, use_container_width=True, hide_index=True)
+        st.dataframe(df_show, width="stretch", hide_index=True)
 
         total = sum(r["amount"] for r in rows)
         st.markdown(f"**Total: ${total:,.2f}**")
@@ -633,7 +633,7 @@ elif page == "📌 Fixed Expenses":
                         "Description (optional)",
                         key=f"fix_desc_{idx}",
                     )
-                    submitted = st.form_submit_button(f"Add to {category}", use_container_width=True)
+                    submitted = st.form_submit_button(f"Add to {category}", width="stretch")
                     if submitted:
                         if not fix_name.strip():
                             st.error("Name is required.")
@@ -741,9 +741,9 @@ elif page == "📌 Fixed Expenses":
 
                                 action_col1, action_col2 = st.columns(2)
                                 with action_col1:
-                                    save_changes = st.form_submit_button("Save Changes", use_container_width=True)
+                                    save_changes = st.form_submit_button("Save Changes", width="stretch")
                                 with action_col2:
-                                    delete_expense = st.form_submit_button("Delete Expense", use_container_width=True)
+                                    delete_expense = st.form_submit_button("Delete Expense", width="stretch")
 
                                 if save_changes:
                                     if not edit_name.strip():
@@ -802,7 +802,7 @@ elif page == "🛒 Variable Expenses":
                 var_amount = st.number_input("Amount ($)", min_value=0.01, step=0.01, format="%.2f")
                 var_date = st.date_input("Date", value=today)
                 var_desc = st.text_input("Description (optional)")
-                submitted = st.form_submit_button("Add Expense", use_container_width=True)
+                submitted = st.form_submit_button("Add Expense", width="stretch")
                 if submitted:
                     if var_amount <= 0:
                         st.error("Amount must be greater than zero.")
@@ -851,7 +851,7 @@ elif page == "🛒 Variable Expenses":
                     title="Spending by Category",
                 )
                 fig_cat.update_layout(showlegend=False, height=280, margin=dict(t=40, b=0))
-                st.plotly_chart(fig_cat, use_container_width=True)
+                st.plotly_chart(fig_cat, width="stretch")
 
             with insight_col2:
                 df_all = _to_df(all_var_rows)
@@ -873,7 +873,7 @@ elif page == "🛒 Variable Expenses":
                         markers=True,
                     )
                     fig_trend.update_layout(height=280, margin=dict(t=40, b=0))
-                    st.plotly_chart(fig_trend, use_container_width=True)
+                    st.plotly_chart(fig_trend, width="stretch")
                 else:
                     st.info("No variable expenses in the last 30 days.")
 
@@ -915,7 +915,7 @@ elif page == "🛒 Variable Expenses":
                         df_show = df_tab[["date", "amount", "category", "description"]].copy()
                         df_show.columns = ["Date", "Amount ($)", "Category", "Description"]
                         df_show["Amount ($)"] = df_show["Amount ($)"].map(lambda x: f"{x:,.2f}")
-                        st.dataframe(df_show, use_container_width=True, hide_index=True)
+                        st.dataframe(df_show, width="stretch", hide_index=True)
 
                         st.caption("Inline Actions")
                         for expense in df_tab.sort_values("date", ascending=False).to_dict("records"):
@@ -956,9 +956,9 @@ elif page == "🛒 Variable Expenses":
 
                                     act_c1, act_c2 = st.columns(2)
                                     with act_c1:
-                                        save_edit = st.form_submit_button("Save Changes", use_container_width=True)
+                                        save_edit = st.form_submit_button("Save Changes", width="stretch")
                                     with act_c2:
-                                        delete_item = st.form_submit_button("Delete Expense", use_container_width=True)
+                                        delete_item = st.form_submit_button("Delete Expense", width="stretch")
 
                                     if save_edit:
                                         db.update_variable_expense(
@@ -1013,7 +1013,7 @@ elif page == "💵 Savings":
                 )
                 sav_date = st.date_input("Date", value=today)
                 sav_desc = st.text_input("Description (optional)")
-                submitted = st.form_submit_button("Add Transaction", use_container_width=True)
+                submitted = st.form_submit_button("Add Transaction", width="stretch")
                 if submitted:
                     if sav_amount <= 0:
                         st.error("Amount must be greater than zero.")
@@ -1068,7 +1068,7 @@ elif page == "💵 Savings":
                                 markers=True,
                             )
                             fig_bal.update_layout(height=280, margin=dict(t=40, b=0))
-                            st.plotly_chart(fig_bal, use_container_width=True)
+                            st.plotly_chart(fig_bal, width="stretch")
                         else:
                             bar_data = [{"Account": a, "Balance ($)": balances[a]} for a in SAVINGS_ACCOUNTS]
                             fig_bar = px.bar(
@@ -1079,7 +1079,7 @@ elif page == "💵 Savings":
                                 title="Current Balance by Account",
                             )
                             fig_bar.update_layout(showlegend=False, height=280, margin=dict(t=40, b=0))
-                            st.plotly_chart(fig_bar, use_container_width=True)
+                            st.plotly_chart(fig_bar, width="stretch")
 
                     with table_col:
                         st.caption("Recent Transactions")
@@ -1090,7 +1090,7 @@ elif page == "💵 Savings":
                             df_show = df_sav[["id", "date", "type", "amount", "description"]].copy()
                             df_show.columns = ["ID", "Date", "Type", "Amount ($)", "Description"]
                         df_show["Amount ($)"] = df_show["Amount ($)"].map(lambda x: f"{x:,.2f}")
-                        st.dataframe(df_show, use_container_width=True, hide_index=True)
+                        st.dataframe(df_show, width="stretch", hide_index=True)
 
                     del_col1, del_col2 = st.columns([3, 1])
                     with del_col1:
@@ -1102,7 +1102,7 @@ elif page == "💵 Savings":
                         )
                     with del_col2:
                         st.write(" ")
-                        if st.button("Delete", key=f"btn_del_sav_{tab_label}", use_container_width=True):
+                        if st.button("Delete", key=f"btn_del_sav_{tab_label}", width="stretch"):
                             db.delete_savings_transaction(int(del_id))
                             st.success("Transaction deleted.")
                             st.rerun()
@@ -1225,7 +1225,7 @@ elif page == "💳 Debt":
                         )
                         apply_manual_payment = st.form_submit_button(
                             "Apply Manual Payment",
-                            use_container_width=True,
+                            width="stretch",
                             disabled=payment_disabled,
                         )
                         if apply_manual_payment:
@@ -1260,7 +1260,7 @@ elif page == "💳 Debt":
                                     if st.button(
                                         f"Apply {MONTHS[sel_month]}",
                                         key=f"auto_pay_{d['id']}_{fe['id']}",
-                                        use_container_width=True,
+                                        width="stretch",
                                         disabled=payment_disabled,
                                     ):
                                         if fe["amount"] > d["current_balance"]:
@@ -1276,7 +1276,7 @@ elif page == "💳 Debt":
                                 if st.button(
                                     "Unlink",
                                     key=f"unlink_fe_{d['id']}_{fe['id']}",
-                                    use_container_width=True,
+                                    width="stretch",
                                 ):
                                     db.unlink_fixed_expense_from_debt(int(fe["id"]))
                                     st.success(f"Unlinked '{fe['name']}' from {d['name']}.")
@@ -1284,7 +1284,7 @@ elif page == "💳 Debt":
                     else:
                         st.caption("No fixed expenses linked to this debt.")
 
-                    if st.button("Delete Debt", key=f"delete_debt_{d['id']}", use_container_width=True):
+                    if st.button("Delete Debt", key=f"delete_debt_{d['id']}", width="stretch"):
                         db.delete_debt(int(d["id"]))
                         st.success(f"Deleted {d['name']}.")
                         st.rerun()
@@ -1303,7 +1303,7 @@ elif page == "💳 Debt":
                 title="Remaining Balance by Debt",
             )
             fig_debt.update_layout(showlegend=False, height=300, margin=dict(t=40, b=0))
-            st.plotly_chart(fig_debt, use_container_width=True)
+            st.plotly_chart(fig_debt, width="stretch")
     else:
         st.info("No debts recorded yet.")
 
@@ -1420,7 +1420,7 @@ elif page == "📈 Reports":
             inc_cat = df_inc.groupby("category")["amount"].sum().reset_index()
             fig_inc = px.pie(inc_cat, names="category", values="amount", title="Income Sources")
             fig_inc.update_layout(height=300, margin=dict(t=30, b=0))
-            st.plotly_chart(fig_inc, use_container_width=True)
+            st.plotly_chart(fig_inc, width="stretch")
 
         # variable breakdown
         if var_rows:
@@ -1435,7 +1435,7 @@ elif page == "📈 Reports":
                 labels={"amount": "Amount ($)", "category": "Category"},
             )
             fig_var.update_layout(showlegend=False, height=300, margin=dict(t=0))
-            st.plotly_chart(fig_var, use_container_width=True)
+            st.plotly_chart(fig_var, width="stretch")
 
         # table summary
         st.subheader("Budget Summary Table")
@@ -1520,7 +1520,7 @@ elif page == "📈 Reports":
                     color_discrete_sequence=["#00CC96", "#EF553B", "#636EFA", "#A3A3A3"],
                 )
                 fig_alloc.update_layout(height=280, margin=dict(t=10, b=0))
-                st.plotly_chart(fig_alloc, use_container_width=True)
+                st.plotly_chart(fig_alloc, width="stretch")
 
         # --- debt overview (informational only, not included in net) --------
         report_debts = db.get_debts()
@@ -1547,7 +1547,7 @@ elif page == "📈 Reports":
             df_debt_show["APR (%)"] = df_debt_show["APR (%)"].map(lambda x: f"{x:.2f}")
             df_debt_show["Min Payment ($)"] = df_debt_show["Min Payment ($)"].map(lambda x: f"{x:,.2f}")
             df_debt_show["Due Date"] = df_debt_show["Due Date"].fillna("—")
-            st.dataframe(df_debt_show, use_container_width=True, hide_index=True)
+            st.dataframe(df_debt_show, width="stretch", hide_index=True)
             if len(report_debts) > 1:
                 fig_debt_report = px.bar(
                     [{"Debt": d["name"], "Balance ($)": d["current_balance"]} for d in report_debts],
@@ -1557,7 +1557,7 @@ elif page == "📈 Reports":
                     title="Remaining Balance by Debt",
                 )
                 fig_debt_report.update_layout(showlegend=False, height=280, margin=dict(t=40, b=0))
-                st.plotly_chart(fig_debt_report, use_container_width=True)
+                st.plotly_chart(fig_debt_report, width="stretch")
 
     else:
         st.subheader(f"Yearly Summary — {sel_year}")
@@ -1605,7 +1605,7 @@ elif page == "📈 Reports":
         fig_trend.add_trace(go.Scatter(x=df_yr["Month"], y=df_yr["Total Expenses"], name="Total Expenses", mode="lines+markers", line=dict(color="#EF553B")))
         fig_trend.add_trace(go.Scatter(x=df_yr["Month"], y=df_yr["Net"], name="Net", mode="lines+markers", line=dict(color="#636EFA", dash="dot")))
         fig_trend.update_layout(title="Monthly Income vs Expenses", yaxis_title="Amount ($)", height=400)
-        st.plotly_chart(fig_trend, use_container_width=True)
+        st.plotly_chart(fig_trend, width="stretch")
 
         # monthly breakdown bar
         fig_bar = go.Figure(data=[
@@ -1613,14 +1613,14 @@ elif page == "📈 Reports":
             go.Bar(name="Variable", x=df_yr["Month"], y=df_yr["Variable"], marker_color="#636EFA"),
         ])
         fig_bar.update_layout(barmode="stack", title="Monthly Expense Breakdown", yaxis_title="Amount ($)", height=350)
-        st.plotly_chart(fig_bar, use_container_width=True)
+        st.plotly_chart(fig_bar, width="stretch")
 
         # data table
         st.subheader("Monthly Details")
         df_display = df_yr.copy()
         for col in ["Income", "Fixed", "Variable", "Total Expenses", "Net"]:
             df_display[col] = df_display[col].map(lambda x: f"${x:,.2f}")
-        st.dataframe(df_display, use_container_width=True, hide_index=True)
+        st.dataframe(df_display, width="stretch", hide_index=True)
 
         # --- debt overview (informational only, not included in net) --------
         report_debts_yr = db.get_debts()
@@ -1647,7 +1647,7 @@ elif page == "📈 Reports":
             df_debt_yr_show["APR (%)"] = df_debt_yr_show["APR (%)"].map(lambda x: f"{x:.2f}")
             df_debt_yr_show["Min Payment ($)"] = df_debt_yr_show["Min Payment ($)"].map(lambda x: f"{x:,.2f}")
             df_debt_yr_show["Due Date"] = df_debt_yr_show["Due Date"].fillna("—")
-            st.dataframe(df_debt_yr_show, use_container_width=True, hide_index=True)
+            st.dataframe(df_debt_yr_show, width="stretch", hide_index=True)
             if len(report_debts_yr) > 1:
                 fig_debt_yr = px.bar(
                     [{"Debt": d["name"], "Balance ($)": d["current_balance"]} for d in report_debts_yr],
@@ -1657,4 +1657,4 @@ elif page == "📈 Reports":
                     title="Remaining Balance by Debt",
                 )
                 fig_debt_yr.update_layout(showlegend=False, height=280, margin=dict(t=40, b=0))
-                st.plotly_chart(fig_debt_yr, use_container_width=True)
+                st.plotly_chart(fig_debt_yr, width="stretch")
