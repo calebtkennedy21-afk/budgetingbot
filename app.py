@@ -566,109 +566,208 @@ elif page == "📌 Fixed Expenses":
         "They are included in budget calculations as long as they are active."
     )
 
-    with st.expander("➕ Add Fixed Expense", expanded=True):
-        with st.form("fixed_form", clear_on_submit=True):
-            c1, c2 = st.columns(2)
-            with c1:
-                fix_name = st.text_input("Name (e.g. Rent, Netflix)")
-                fix_amount = st.number_input("Amount ($)", min_value=0.01, step=0.01, format="%.2f")
-                fix_freq = st.selectbox("Frequency", ["monthly", "yearly"])
-            with c2:
-                fix_cat = st.selectbox("Category", FIXED_EXPENSE_CATEGORIES)
-                fix_start = st.date_input("Start Date", value=today.replace(day=1))
-                fix_end = st.date_input(
-                    "End Date (optional — leave as today if ongoing)",
-                    value=None,
-                    help="Leave blank / clear to indicate this expense is ongoing.",
-                )
-                fix_desc = st.text_input("Description (optional)")
-            submitted = st.form_submit_button("Add Fixed Expense")
-            if submitted:
-                if not fix_name.strip():
-                    st.error("Name is required.")
-                elif fix_amount <= 0:
-                    st.error("Amount must be greater than zero.")
-                else:
-                    end_str = str(fix_end) if fix_end else None
-                    db.add_fixed_expense(
-                        fix_name.strip(),
-                        fix_amount,
-                        fix_cat,
-                        fix_freq,
-                        str(fix_start),
-                        end_str,
-                        fix_desc,
-                    )
-                    st.success(f"✅ Added fixed expense: {fix_name}")
-                    st.rerun()
-
-    st.subheader("All Fixed Expenses")
     show_active = st.checkbox("Show active only", value=True)
     rows = db.get_fixed_expenses(active_only=show_active)
-    if rows:
-        df = _to_df(rows)
-        df_show = df[["id", "name", "amount", "frequency", "category", "start_date", "end_date", "description"]].copy()
-        df_show.columns = ["ID", "Name", "Amount ($)", "Frequency", "Category", "Start", "End", "Description"]
-        df_show["Amount ($)"] = df_show["Amount ($)"].map(lambda x: f"{x:,.2f}")
-        st.dataframe(df_show, use_container_width=True, hide_index=True)
+    debts_for_link = db.get_debts()
+    debt_options = {f"{d['name']} (ID {d['id']})": d["id"] for d in debts_for_link}
+    debt_id_to_label = {d["id"]: f"{d['name']} (ID {d['id']})" for d in debts_for_link}
+    extra_categories = sorted({row["category"] for row in rows if row["category"] not in FIXED_EXPENSE_CATEGORIES})
+    category_options = FIXED_EXPENSE_CATEGORIES + extra_categories
+    rows_by_category = {category: [] for category in category_options}
+    for row in rows:
+        rows_by_category.setdefault(row["category"], []).append(row)
 
-        monthly_total = db.get_monthly_fixed_cost(sel_year, sel_month)
-        st.markdown(f"**Monthly cost for {MONTHS[sel_month]} {sel_year}: ${monthly_total:,.2f}**")
+    monthly_total = db.get_monthly_fixed_cost(sel_year, sel_month)
+    st.markdown(f"**Monthly cost for {MONTHS[sel_month]} {sel_year}: ${monthly_total:,.2f}**")
 
-        st.markdown("---")
-        col_a, col_b = st.columns(2)
-        with col_a:
-            end_id = st.number_input("Set end date for ID", min_value=1, step=1)
-            end_date_val = st.date_input("End Date", value=today)
-            if st.button("✏️ Set End Date"):
-                db.update_fixed_expense_end_date(int(end_id), str(end_date_val))
-                st.success("End date updated.")
-                st.rerun()
-        with col_b:
-            del_id = st.number_input("Delete fixed expense by ID", min_value=1, step=1, key="del_fixed")
-            if st.button("🗑 Delete Fixed Expense"):
-                db.delete_fixed_expense(int(del_id))
-                st.success("Entry deleted.")
-                st.rerun()
+    st.subheader("Fixed Expense Categories")
+    st.caption("Each category card lets you add new expenses and manage the ones already saved in that category.")
 
-        # --- link fixed expense to a debt ----------------------------------
-        debts_for_link = db.get_debts()
-        if debts_for_link:
-            st.markdown("---")
-            st.subheader("🔗 Link Fixed Expense to Debt")
-            st.caption(
-                "Tag a fixed expense (e.g. 'Car Loan Payment') as a payment toward a debt. "
-                "Once linked, you can apply that payment to reduce the debt balance each month from the Debt page."
-            )
-            link_col1, link_col2 = st.columns(2)
-            with link_col1:
-                link_fe_id = st.number_input("Fixed Expense ID", min_value=1, step=1, key="link_fe_id")
-                debt_options = {f"{d['name']} (ID {d['id']})": d["id"] for d in debts_for_link}
-                selected_debt_label = st.selectbox("Link to Debt", list(debt_options.keys()), key="link_debt_sel")
-                if st.button("🔗 Link"):
-                    db.link_fixed_expense_to_debt(int(link_fe_id), debt_options[selected_debt_label])
-                    st.success(f"Fixed Expense {link_fe_id} linked to {selected_debt_label}.")
-                    st.rerun()
-            with link_col2:
-                unlink_fe_id = st.number_input("Fixed Expense ID to Unlink", min_value=1, step=1, key="unlink_fe_id")
-                if st.button("🔓 Unlink"):
-                    db.unlink_fixed_expense_from_debt(int(unlink_fe_id))
-                    st.success(f"Fixed Expense {unlink_fe_id} unlinked.")
-                    st.rerun()
+    card_columns = st.columns(3)
+    for idx, category in enumerate(category_options):
+        category_rows = rows_by_category.get(category, [])
+        with card_columns[idx % 3]:
+            with st.container(border=True):
+                st.markdown(f"### {category}")
+                st.caption(f"{len(category_rows)} expense(s) in this category")
 
-            # show current links
-            df_links = _to_df(rows)
-            linked_rows = df_links[df_links["linked_debt_id"].notna()][["id", "name", "amount", "linked_debt_id"]].copy()
-            if not linked_rows.empty:
-                debt_id_to_name = {d["id"]: d["name"] for d in debts_for_link}
-                linked_rows["Linked Debt"] = linked_rows["linked_debt_id"].map(
-                    lambda x: debt_id_to_name.get(int(x), f"ID {int(x)}")
-                )
-                linked_rows = linked_rows.rename(columns={"id": "FE ID", "name": "Fixed Expense", "amount": "Amount ($)"})
-                linked_rows["Amount ($)"] = linked_rows["Amount ($)"].map(lambda x: f"{x:,.2f}")
-                st.dataframe(linked_rows[["FE ID", "Fixed Expense", "Amount ($)", "Linked Debt"]], use_container_width=True, hide_index=True)
-    else:
-        st.info("No fixed expenses found.")
+                with st.form(f"fixed_form_{idx}", clear_on_submit=True):
+                    fix_name = st.text_input(
+                        "Name",
+                        placeholder=f"Add a {category.lower()} expense",
+                        key=f"fix_name_{idx}",
+                    )
+                    fix_amount = st.number_input(
+                        "Amount ($)",
+                        min_value=0.01,
+                        step=0.01,
+                        format="%.2f",
+                        key=f"fix_amount_{idx}",
+                    )
+                    freq_col, start_col = st.columns(2)
+                    with freq_col:
+                        fix_freq = st.selectbox(
+                            "Frequency",
+                            ["monthly", "yearly"],
+                            key=f"fix_freq_{idx}",
+                        )
+                    with start_col:
+                        fix_start = st.date_input(
+                            "Start Date",
+                            value=today.replace(day=1),
+                            key=f"fix_start_{idx}",
+                        )
+                    fix_end = st.date_input(
+                        "End Date",
+                        value=None,
+                        help="Leave blank / clear to indicate this expense is ongoing.",
+                        key=f"fix_end_{idx}",
+                    )
+                    fix_desc = st.text_input(
+                        "Description (optional)",
+                        key=f"fix_desc_{idx}",
+                    )
+                    submitted = st.form_submit_button(f"Add to {category}", use_container_width=True)
+                    if submitted:
+                        if not fix_name.strip():
+                            st.error("Name is required.")
+                        elif fix_amount <= 0:
+                            st.error("Amount must be greater than zero.")
+                        else:
+                            end_str = str(fix_end) if fix_end else None
+                            db.add_fixed_expense(
+                                fix_name.strip(),
+                                fix_amount,
+                                category,
+                                fix_freq,
+                                str(fix_start),
+                                end_str,
+                                fix_desc,
+                            )
+                            st.success(f"✅ Added fixed expense: {fix_name}")
+                            st.rerun()
+
+                st.markdown("**Saved Expenses**")
+                if category_rows:
+                    for expense in category_rows:
+                        linked_label = None
+                        if expense.get("linked_debt_id") is not None:
+                            linked_label = debt_id_to_label.get(int(expense["linked_debt_id"]), f"Debt ID {int(expense['linked_debt_id'])}")
+                        expander_label = f"{expense['name']} • ${expense['amount']:,.2f} • {expense['frequency'].title()}"
+                        with st.expander(expander_label):
+                            start_value = date.fromisoformat(str(expense["start_date"]))
+                            end_value = (
+                                date.fromisoformat(str(expense["end_date"]))
+                                if expense.get("end_date")
+                                else None
+                            )
+                            if linked_label:
+                                st.caption(f"Linked debt: {linked_label}")
+
+                            with st.form(f"edit_fixed_{expense['id']}"):
+                                edit_name = st.text_input(
+                                    "Name",
+                                    value=expense["name"],
+                                    key=f"edit_fix_name_{expense['id']}",
+                                )
+                                edit_amount = st.number_input(
+                                    "Amount ($)",
+                                    min_value=0.01,
+                                    step=0.01,
+                                    format="%.2f",
+                                    value=float(expense["amount"]),
+                                    key=f"edit_fix_amount_{expense['id']}",
+                                )
+                                edit_col1, edit_col2 = st.columns(2)
+                                with edit_col1:
+                                    edit_category = st.selectbox(
+                                        "Category",
+                                        category_options,
+                                        index=category_options.index(expense["category"]),
+                                        key=f"edit_fix_category_{expense['id']}",
+                                    )
+                                    edit_start = st.date_input(
+                                        "Start Date",
+                                        value=start_value,
+                                        key=f"edit_fix_start_{expense['id']}",
+                                    )
+                                with edit_col2:
+                                    edit_freq = st.selectbox(
+                                        "Frequency",
+                                        ["monthly", "yearly"],
+                                        index=["monthly", "yearly"].index(expense["frequency"]),
+                                        key=f"edit_fix_freq_{expense['id']}",
+                                    )
+                                    edit_end = st.date_input(
+                                        "End Date",
+                                        value=end_value,
+                                        help="Leave blank / clear to indicate this expense is ongoing.",
+                                        key=f"edit_fix_end_{expense['id']}",
+                                    )
+                                edit_desc = st.text_input(
+                                    "Description (optional)",
+                                    value=expense.get("description") or "",
+                                    key=f"edit_fix_desc_{expense['id']}",
+                                )
+
+                                selected_debt_label = "Not linked"
+                                if debts_for_link:
+                                    debt_labels = ["Not linked", *debt_options.keys()]
+                                    current_debt_label = (
+                                        debt_id_to_label.get(int(expense["linked_debt_id"]), "Not linked")
+                                        if expense.get("linked_debt_id") is not None
+                                        else "Not linked"
+                                    )
+                                    selected_debt_label = st.selectbox(
+                                        "Linked Debt",
+                                        debt_labels,
+                                        index=debt_labels.index(current_debt_label),
+                                        key=f"edit_fix_debt_{expense['id']}",
+                                    )
+
+                                action_col1, action_col2 = st.columns(2)
+                                with action_col1:
+                                    save_changes = st.form_submit_button("Save Changes", use_container_width=True)
+                                with action_col2:
+                                    delete_expense = st.form_submit_button("Delete Expense", use_container_width=True)
+
+                                if save_changes:
+                                    if not edit_name.strip():
+                                        st.error("Name is required.")
+                                    elif edit_amount <= 0:
+                                        st.error("Amount must be greater than zero.")
+                                    else:
+                                        db.update_fixed_expense(
+                                            int(expense["id"]),
+                                            edit_name.strip(),
+                                            edit_amount,
+                                            edit_category,
+                                            edit_freq,
+                                            str(edit_start),
+                                            str(edit_end) if edit_end else None,
+                                            edit_desc,
+                                        )
+                                        if debts_for_link:
+                                            if selected_debt_label == "Not linked":
+                                                db.unlink_fixed_expense_from_debt(int(expense["id"]))
+                                            else:
+                                                db.link_fixed_expense_to_debt(
+                                                    int(expense["id"]),
+                                                    debt_options[selected_debt_label],
+                                                )
+                                        st.success(f"Updated {edit_name.strip()}.")
+                                        st.rerun()
+
+                                if delete_expense:
+                                    db.delete_fixed_expense(int(expense["id"]))
+                                    st.success(f"Deleted {expense['name']}.")
+                                    st.rerun()
+                else:
+                    empty_message = "No active expenses in this category yet." if show_active else "No expenses in this category yet."
+                    st.caption(empty_message)
+
+    if not rows:
+        st.info("No fixed expenses found for the current filter.")
 
 
 # ===========================================================================

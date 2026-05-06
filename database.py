@@ -356,6 +356,30 @@ def delete_fixed_expense(record_id: int) -> None:
     _write("DELETE FROM fixed_expenses WHERE id = %s", (record_id,))
 
 
+def update_fixed_expense(
+    record_id: int,
+    name: str,
+    amount: float,
+    category: str,
+    frequency: str,
+    start_date: str,
+    end_date: str = None,
+    description: str = "",
+) -> None:
+    _write(
+        """UPDATE fixed_expenses
+           SET name = %s,
+               amount = %s,
+               category = %s,
+               frequency = %s,
+               start_date = %s,
+               end_date = %s,
+               description = %s
+           WHERE id = %s""",
+        (name, amount, category, frequency, start_date, end_date, description, record_id),
+    )
+
+
 def update_fixed_expense_end_date(record_id: int, end_date: str) -> None:
     _write(
         "UPDATE fixed_expenses SET end_date = %s WHERE id = %s",
