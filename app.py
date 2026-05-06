@@ -790,56 +790,193 @@ elif page == "📌 Fixed Expenses":
 elif page == "🛒 Variable Expenses":
     st.title("🛒 Variable Expenses")
 
-    with st.expander("➕ Add Variable Expense", expanded=True):
-        with st.form("var_form", clear_on_submit=True):
-            c1, c2 = st.columns(2)
-            with c1:
-                var_date = st.date_input("Date", value=today)
-                var_amount = st.number_input("Amount ($)", min_value=0.01, step=0.01, format="%.2f")
-            with c2:
-                var_cat = st.selectbox("Category", VARIABLE_EXPENSE_CATEGORIES)
-                var_desc = st.text_input("Description (optional)")
-            submitted = st.form_submit_button("Add Expense")
-            if submitted:
-                if var_amount <= 0:
-                    st.error("Amount must be greater than zero.")
-                else:
-                    db.add_variable_expense(str(var_date), var_amount, var_cat, var_desc)
-                    st.success(f"✅ Added ${var_amount:,.2f} expense on {var_date}.")
-                    st.rerun()
-
-    st.subheader(f"Variable Expenses — {MONTHS[sel_month]} {sel_year}")
     rows = db.get_variable_expenses(year=sel_year, month=sel_month)
-    if rows:
-        df = _to_df(rows)
-        df_show = df[["id", "date", "amount", "category", "description"]].copy()
-        df_show.columns = ["ID", "Date", "Amount ($)", "Category", "Description"]
-        df_show["Amount ($)"] = df_show["Amount ($)"].map(lambda x: f"{x:,.2f}")
-        st.dataframe(df_show, use_container_width=True, hide_index=True)
+    all_var_rows = db.get_variable_expenses()
 
-        total = sum(r["amount"] for r in rows)
-        st.markdown(f"**Total: ${total:,.2f}**")
+    entry_col, review_col = st.columns([1, 2])
+    with entry_col:
+        with st.container(border=True):
+            st.subheader("Quick Add")
+            with st.form("var_form", clear_on_submit=True):
+                var_cat = st.selectbox("Category", VARIABLE_EXPENSE_CATEGORIES)
+                var_amount = st.number_input("Amount ($)", min_value=0.01, step=0.01, format="%.2f")
+                var_date = st.date_input("Date", value=today)
+                var_desc = st.text_input("Description (optional)")
+                submitted = st.form_submit_button("Add Expense", use_container_width=True)
+                if submitted:
+                    if var_amount <= 0:
+                        st.error("Amount must be greater than zero.")
+                    else:
+                        duplicates = [
+                            r for r in all_var_rows
+                            if r["date"] == str(var_date)
+                            and float(r["amount"]) == float(var_amount)
+                            and r["category"] == var_cat
+                        ]
+                        if duplicates:
+                            st.warning("A similar expense already exists for this date/category/amount.")
+                        db.add_variable_expense(str(var_date), var_amount, var_cat, var_desc)
+                        st.success(f"✅ Added ${var_amount:,.2f} expense on {var_date}.")
+                        st.rerun()
 
-        # category breakdown
-        df_cat = df.groupby("category")["amount"].sum().reset_index()
-        fig = px.bar(
-            df_cat,
-            x="category",
-            y="amount",
-            color="category",
-            labels={"amount": "Amount ($)", "category": "Category"},
-            title="Spending by Category",
-        )
-        fig.update_layout(showlegend=False, height=300)
-        st.plotly_chart(fig, use_container_width=True)
+    with review_col:
+        st.subheader(f"Variable Expenses — {MONTHS[sel_month]} {sel_year}")
+        if rows:
+            df_month = _to_df(rows)
+            total = float(df_month["amount"].sum())
+            txn_count = int(len(df_month))
+            avg_spend = total / txn_count if txn_count else 0.0
+            cat_totals = df_month.groupby("category")["amount"].sum().sort_values(ascending=False)
+            top_category = cat_totals.index[0] if not cat_totals.empty else "N/A"
 
-        del_id = st.number_input("Delete entry by ID", min_value=1, step=1, key="del_var")
-        if st.button("🗑 Delete Variable Expense"):
-            db.delete_variable_expense(int(del_id))
-            st.success("Entry deleted.")
-            st.rerun()
-    else:
-        st.info("No variable expenses for this period.")
+            m1, m2, m3, m4 = st.columns(4)
+            with m1:
+                st.metric("Total This Month", f"${total:,.2f}")
+            with m2:
+                st.metric("Transactions", f"{txn_count}")
+            with m3:
+                st.metric("Average Spend", f"${avg_spend:,.2f}")
+            with m4:
+                st.metric("Biggest Category", top_category)
+
+            insight_col1, insight_col2 = st.columns(2)
+            with insight_col1:
+                df_cat = df_month.groupby("category")["amount"].sum().reset_index()
+                fig_cat = px.bar(
+                    df_cat,
+                    x="category",
+                    y="amount",
+                    color="category",
+                    labels={"amount": "Amount ($)", "category": "Category"},
+                    title="Spending by Category",
+                )
+                fig_cat.update_layout(showlegend=False, height=280, margin=dict(t=40, b=0))
+                st.plotly_chart(fig_cat, use_container_width=True)
+
+            with insight_col2:
+                df_all = _to_df(all_var_rows)
+                if not df_all.empty:
+                    df_all["date"] = pd.to_datetime(df_all["date"])
+                    window_start = pd.Timestamp(today) - pd.Timedelta(days=29)
+                    df_30 = df_all[df_all["date"] >= window_start].copy()
+                else:
+                    df_30 = pd.DataFrame()
+
+                if not df_30.empty:
+                    df_trend = df_30.groupby("date")["amount"].sum().reset_index()
+                    fig_trend = px.line(
+                        df_trend,
+                        x="date",
+                        y="amount",
+                        title="Last 30 Days Spend",
+                        labels={"amount": "Amount ($)", "date": "Date"},
+                        markers=True,
+                    )
+                    fig_trend.update_layout(height=280, margin=dict(t=40, b=0))
+                    st.plotly_chart(fig_trend, use_container_width=True)
+                else:
+                    st.info("No variable expenses in the last 30 days.")
+
+            st.markdown("---")
+            tab_labels = ["All", *VARIABLE_EXPENSE_CATEGORIES]
+            tabs = st.tabs(tab_labels)
+            for idx, tab_label in enumerate(tab_labels):
+                with tabs[idx]:
+                    df_tab = (
+                        df_month.copy()
+                        if tab_label == "All"
+                        else df_month[df_month["category"] == tab_label].copy()
+                    )
+
+                    filter_col1, filter_col2 = st.columns(2)
+                    with filter_col1:
+                        search_text = st.text_input(
+                            "Search description",
+                            key=f"var_search_{idx}",
+                            placeholder="Type to filter",
+                        ).strip().lower()
+                    with filter_col2:
+                        min_amount = st.number_input(
+                            "Min amount ($)",
+                            min_value=0.0,
+                            step=1.0,
+                            value=0.0,
+                            key=f"var_min_{idx}",
+                        )
+
+                    if search_text:
+                        desc_values = df_tab["description"].fillna("").astype(str).str.lower()
+                        df_tab = df_tab[desc_values.str.contains(search_text)]
+                    df_tab = df_tab[df_tab["amount"] >= float(min_amount)]
+
+                    if df_tab.empty:
+                        st.info("No expenses match this filter.")
+                    else:
+                        df_show = df_tab[["date", "amount", "category", "description"]].copy()
+                        df_show.columns = ["Date", "Amount ($)", "Category", "Description"]
+                        df_show["Amount ($)"] = df_show["Amount ($)"].map(lambda x: f"{x:,.2f}")
+                        st.dataframe(df_show, use_container_width=True, hide_index=True)
+
+                        st.caption("Inline Actions")
+                        for expense in df_tab.sort_values("date", ascending=False).to_dict("records"):
+                            row_label = f"{expense['date']} • ${expense['amount']:,.2f} • {expense['category']}"
+                            with st.expander(row_label):
+                                with st.form(f"edit_var_{int(expense['id'])}"):
+                                    edit_c1, edit_c2 = st.columns(2)
+                                    with edit_c1:
+                                        edit_date = st.date_input(
+                                            "Date",
+                                            value=date.fromisoformat(str(expense["date"])),
+                                            key=f"edit_var_date_{int(expense['id'])}",
+                                        )
+                                        edit_amount = st.number_input(
+                                            "Amount ($)",
+                                            min_value=0.01,
+                                            step=0.01,
+                                            format="%.2f",
+                                            value=float(expense["amount"]),
+                                            key=f"edit_var_amt_{int(expense['id'])}",
+                                        )
+                                    with edit_c2:
+                                        current_cat = str(expense["category"])
+                                        edit_cat_options = VARIABLE_EXPENSE_CATEGORIES.copy()
+                                        if current_cat not in edit_cat_options:
+                                            edit_cat_options.append(current_cat)
+                                        edit_cat = st.selectbox(
+                                            "Category",
+                                            edit_cat_options,
+                                            index=edit_cat_options.index(current_cat),
+                                            key=f"edit_var_cat_{int(expense['id'])}",
+                                        )
+                                        edit_desc = st.text_input(
+                                            "Description (optional)",
+                                            value=expense.get("description") or "",
+                                            key=f"edit_var_desc_{int(expense['id'])}",
+                                        )
+
+                                    act_c1, act_c2 = st.columns(2)
+                                    with act_c1:
+                                        save_edit = st.form_submit_button("Save Changes", use_container_width=True)
+                                    with act_c2:
+                                        delete_item = st.form_submit_button("Delete Expense", use_container_width=True)
+
+                                    if save_edit:
+                                        db.update_variable_expense(
+                                            int(expense["id"]),
+                                            str(edit_date),
+                                            float(edit_amount),
+                                            edit_cat,
+                                            edit_desc,
+                                        )
+                                        st.success("Expense updated.")
+                                        st.rerun()
+
+                                    if delete_item:
+                                        db.delete_variable_expense(int(expense["id"]))
+                                        st.success("Expense deleted.")
+                                        st.rerun()
+        else:
+            st.info("No variable expenses for this period.")
 
 
 # ===========================================================================

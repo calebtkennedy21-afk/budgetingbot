@@ -468,6 +468,24 @@ def get_variable_expenses(year: int = None, month: int = None):
     return _read(query, tuple(params))
 
 
+def update_variable_expense(
+    record_id: int,
+    date: str,
+    amount: float,
+    category: str,
+    description: str,
+) -> None:
+    _write(
+        """UPDATE variable_expenses
+           SET date = %s,
+               amount = %s,
+               category = %s,
+               description = %s
+           WHERE id = %s""",
+        (date, amount, category, description, record_id),
+    )
+
+
 def delete_variable_expense(record_id: int) -> None:
     _write("DELETE FROM variable_expenses WHERE id = %s", (record_id,))
 
