@@ -687,9 +687,22 @@ elif page == "📌 Fixed Expenses":
     card_columns = st.columns(3)
     for idx, category in enumerate(category_options):
         category_rows = rows_by_category.get(category, [])
+        category_total = sum(
+            float(expense["amount"])
+            if expense["frequency"] == "monthly"
+            else float(expense["amount"]) / 12
+            for expense in category_rows
+        )
         with card_columns[idx % 3]:
             with st.container(border=True):
-                st.markdown(f"### {category}")
+                title_col, total_col = st.columns([3, 2])
+                with title_col:
+                    st.markdown(f"### {category}")
+                with total_col:
+                    st.markdown(
+                        f"<div style='text-align: right; font-weight: 600;'>${category_total:,.2f}/mo</div>",
+                        unsafe_allow_html=True,
+                    )
                 st.caption(f"{len(category_rows)} expense(s) in this category")
 
                 with st.form(f"fixed_form_{idx}", clear_on_submit=True):
