@@ -534,14 +534,14 @@ elif page == "💰 Income":
         with kpi_cols[i]:
             src_mo = sum(r['amount'] for r in month_by_src.get(src, []))
             st.markdown(
-                f"<div style='font-size:0.75rem;color:gray;margin-bottom:2px'>{src} — {MONTHS[sel_month]}</div>"
-                f"<div style='font-size:1rem;font-weight:600'>${src_mo:,.2f}</div>",
+                f"<div style='font-size:0.85rem;color:gray;margin-bottom:2px'>{src} — {MONTHS[sel_month]}</div>"
+                f"<div style='font-size:1.1rem;font-weight:600'>${src_mo:,.2f}</div>",
                 unsafe_allow_html=True,
             )
     with kpi_cols[-1]:
         st.markdown(
-            f"<div style='font-size:0.75rem;color:gray;margin-bottom:2px'>Total This Month</div>"
-            f"<div style='font-size:1rem;font-weight:600'>${total_month:,.2f}</div>",
+            f"<div style='font-size:0.85rem;color:gray;margin-bottom:2px'>Total This Month</div>"
+            f"<div style='font-size:1.1rem;font-weight:600'>${total_month:,.2f}</div>",
             unsafe_allow_html=True,
         )
 
