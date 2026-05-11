@@ -132,6 +132,7 @@ def init_db() -> None:
                         amount      REAL   NOT NULL CHECK(amount > 0),
                         category    TEXT   NOT NULL DEFAULT 'General',
                         description TEXT,
+                        is_recurring BOOLEAN NOT NULL DEFAULT FALSE,
                         created_at  TEXT   NOT NULL
                                     DEFAULT to_char(now(), 'YYYY-MM-DD HH24:MI:SS')
                     )
@@ -199,6 +200,9 @@ def init_db() -> None:
                     ALTER TABLE debts ADD COLUMN IF NOT EXISTS minimum_payment_date TEXT
                 """)
                 cur.execute("""
+                    ALTER TABLE variable_expenses ADD COLUMN IF NOT EXISTS is_recurring BOOLEAN NOT NULL DEFAULT FALSE
+                """)
+                cur.execute("""
                     ALTER TABLE income ADD COLUMN IF NOT EXISTS source TEXT NOT NULL DEFAULT 'Caleb'
                 """)
             conn.commit()
@@ -237,6 +241,7 @@ def init_db() -> None:
                 amount      REAL    NOT NULL CHECK(amount > 0),
                 category    TEXT    NOT NULL DEFAULT 'General',
                 description TEXT,
+                is_recurring INTEGER NOT NULL DEFAULT 0,
                 created_at  TEXT    NOT NULL DEFAULT (datetime('now'))
             );
 
@@ -297,6 +302,10 @@ def init_db() -> None:
         cols_inc = [row[1] for row in conn.execute("PRAGMA table_info(income)").fetchall()]
         if "source" not in cols_inc:
             conn.execute("ALTER TABLE income ADD COLUMN source TEXT NOT NULL DEFAULT 'Caleb'")
+            conn.commit()
+        cols_var = [row[1] for row in conn.execute("PRAGMA table_info(variable_expenses)").fetchall()]
+        if "is_recurring" not in cols_var:
+            conn.execute("ALTER TABLE variable_expenses ADD COLUMN is_recurring INTEGER NOT NULL DEFAULT 0")
             conn.commit()
         conn.close()
 
@@ -475,11 +484,11 @@ def get_debt_payment_log(debt_id: int):
 # ---------------------------------------------------------------------------
 
 def add_variable_expense(
-    date: str, amount: float, category: str, description: str
+    date: str, amount: float, category: str, description: str, is_recurring: bool = False
 ) -> None:
     _write(
-        "INSERT INTO variable_expenses (date, amount, category, description) VALUES (%s, %s, %s, %s)",
-        (date, amount, category, description),
+        "INSERT INTO variable_expenses (date, amount, category, description, is_recurring) VALUES (%s, %s, %s, %s, %s)",
+        (date, amount, category, description, 1 if is_recurring else 0),
     )
 
 
@@ -502,15 +511,17 @@ def update_variable_expense(
     amount: float,
     category: str,
     description: str,
+    is_recurring: bool = False,
 ) -> None:
     _write(
         """UPDATE variable_expenses
            SET date = %s,
                amount = %s,
                category = %s,
-               description = %s
+               description = %s,
+               is_recurring = %s
            WHERE id = %s""",
-        (date, amount, category, description, record_id),
+        (date, amount, category, description, 1 if is_recurring else 0, record_id),
     )
 
 

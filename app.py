@@ -471,6 +471,97 @@ if page == "📊 Dashboard":
         cat_fig.update_layout(showlegend=False, margin=dict(t=0), height=300)
         st.plotly_chart(cat_fig, width="stretch")
 
+    st.markdown("---")
+
+    # --- recurring vs discretionary breakdown ---------------------------------------
+    all_var_rows = db.get_variable_expenses(year=sel_year, month=sel_month)
+    recurring_amount = sum(r["amount"] for r in all_var_rows if r.get("is_recurring"))
+    discretionary_amount = sum(r["amount"] for r in all_var_rows if not r.get("is_recurring"))
+    
+    if all_var_rows:
+        col_rec_left, col_rec_right = st.columns(2)
+        with col_rec_left:
+            st.subheader("💰 Spending Type Breakdown")
+            if recurring_amount > 0 or discretionary_amount > 0:
+                rec_data = {
+                    "Type": [],
+                    "Amount": [],
+                }
+                if recurring_amount > 0:
+                    rec_data["Type"].append("Recurring Habits")
+                    rec_data["Amount"].append(recurring_amount)
+                if discretionary_amount > 0:
+                    rec_data["Type"].append("Discretionary")
+                    rec_data["Amount"].append(discretionary_amount)
+                
+                if rec_data["Type"]:
+                    fig_rec = px.pie(
+                        rec_data,
+                        names="Type",
+                        values="Amount",
+                        color_discrete_sequence=["#FF6B6B", "#4ECDC4"],
+                    )
+                    fig_rec.update_layout(margin=dict(t=0, b=0, l=0, r=0), height=300)
+                    st.plotly_chart(fig_rec, width="stretch")
+            
+        with col_rec_right:
+            st.subheader("📊 Monthly Forecast")
+            st.markdown("**Based on recurring habits:**")
+            if recurring_amount > 0:
+                st.metric("Recurring Habits This Month", f"${recurring_amount:,.2f}")
+                projected_next = recurring_amount
+                st.metric("Projected Next Month", f"${projected_next:,.2f}", delta=f"${projected_next - discretionary_amount:+,.2f}", delta_color="off")
+                st.caption(f"*Assumes {len([r for r in all_var_rows if r.get('is_recurring')])} recurring habits continue at same rate*")
+            else:
+                st.info("Mark variable expenses as 'recurring habits' to see forecasts.")
+
+    st.markdown("---")
+
+    # --- upcoming fixed expenses for current and next month --------------------
+    upcoming_fixed_expenses = []
+    fixed_expenses_all = db.get_fixed_expenses(active_only=True)
+    
+    # Check current month and next month
+    current_date = date(sel_year, sel_month, 1)
+    next_month = sel_month + 1 if sel_month < 12 else 1
+    next_year = sel_year if sel_month < 12 else sel_year + 1
+    
+    for fe in fixed_expenses_all:
+        start_date = date.fromisoformat(fe["start_date"])
+        end_date = date.fromisoformat(fe["end_date"]) if fe.get("end_date") else None
+        
+        # Check if active during current month or next month
+        if start_date <= current_date and (end_date is None or end_date >= current_date):
+            upcoming_fixed_expenses.append(("current", fe))
+        elif next_month <= 12 and start_date <= date(next_year, next_month, 1) and (end_date is None or end_date >= date(next_year, next_month, 1)):
+            upcoming_fixed_expenses.append(("next", fe))
+    
+    if upcoming_fixed_expenses:
+        st.subheader("⏰ Upcoming Fixed Expenses")
+        
+        current_month_fes = [fe for period, fe in upcoming_fixed_expenses if period == "current"]
+        next_month_fes = [fe for period, fe in upcoming_fixed_expenses if period == "next"]
+        
+        col_curr, col_next = st.columns(2)
+        
+        with col_curr:
+            st.markdown(f"**{MONTHS[sel_month]} {sel_year}**")
+            if current_month_fes:
+                for fe in current_month_fes:
+                    monthly_eq = fe["amount"] if fe["frequency"] == "monthly" else fe["amount"] / 12
+                    st.write(f"• {fe['name']}: ${monthly_eq:,.2f}")
+            else:
+                st.caption("No upcoming fixed expenses")
+        
+        with col_next:
+            st.markdown(f"**{MONTHS[next_month]} {next_year}**")
+            if next_month_fes:
+                for fe in next_month_fes:
+                    monthly_eq = fe["amount"] if fe["frequency"] == "monthly" else fe["amount"] / 12
+                    st.write(f"• {fe['name']}: ${monthly_eq:,.2f}")
+            else:
+                st.caption("No upcoming fixed expenses")
+
     # --- goals summary ------------------------------------------------------
     if goals:
         st.subheader("🎯 Goals Progress")
@@ -910,6 +1001,7 @@ elif page == "🛒 Variable Expenses":
                 var_amount = st.number_input("Amount ($)", min_value=0.01, step=0.01, format="%.2f")
                 var_date = st.date_input("Date", value=today)
                 var_desc = st.text_input("Description (optional)")
+                var_is_recurring = st.checkbox("🔄 Recurring habit (projects forward)")
                 submitted = st.form_submit_button("Add Expense", width="stretch")
                 if submitted:
                     if var_amount <= 0:
@@ -923,7 +1015,7 @@ elif page == "🛒 Variable Expenses":
                         ]
                         if duplicates:
                             st.warning("A similar expense already exists for this date/category/amount.")
-                        db.add_variable_expense(str(var_date), var_amount, var_cat, var_desc)
+                        db.add_variable_expense(str(var_date), var_amount, var_cat, var_desc, var_is_recurring)
                         st.success(f"✅ Added ${var_amount:,.2f} expense on {var_date}.")
                         st.rerun()
 
@@ -1028,7 +1120,8 @@ elif page == "🛒 Variable Expenses":
                         st.caption("Inline Actions")
                         for expense in df_tab.sort_values("date", ascending=False).to_dict("records"):
                             row_label = f"{expense['date']} • ${expense['amount']:,.2f} • {expense['category']}"
-                            with st.expander(row_label):
+                            is_recurring_badge = " 🔄" if expense.get("is_recurring") else ""
+                            with st.expander(row_label + is_recurring_badge):
                                 with st.form(f"edit_var_{idx}_{int(expense['id'])}"):
                                     edit_c1, edit_c2 = st.columns(2)
                                     with edit_c1:
@@ -1061,6 +1154,12 @@ elif page == "🛒 Variable Expenses":
                                             value=expense.get("description") or "",
                                             key=f"edit_var_desc_{idx}_{int(expense['id'])}",
                                         )
+                                    
+                                    edit_is_recurring = st.checkbox(
+                                        "🔄 Recurring habit (projects forward)",
+                                        value=bool(expense.get("is_recurring", 0)),
+                                        key=f"edit_var_recurring_{idx}_{int(expense['id'])}",
+                                    )
 
                                     act_c1, act_c2 = st.columns(2)
                                     with act_c1:
@@ -1075,6 +1174,7 @@ elif page == "🛒 Variable Expenses":
                                             float(edit_amount),
                                             edit_cat,
                                             edit_desc,
+                                            edit_is_recurring,
                                         )
                                         st.success("Expense updated.")
                                         st.rerun()
