@@ -23,6 +23,7 @@ import plotly.graph_objects as go
 import streamlit as st
 
 import database as db
+import ai_insights as ai
 
 # ---------------------------------------------------------------------------
 # App-wide config
@@ -42,6 +43,7 @@ AUTH_USER_ENV = "BUDGETBOT_USERNAME"
 AUTH_SALT_ENV = "BUDGETBOT_PASSWORD_SALT"
 AUTH_HASH_ENV = "BUDGETBOT_PASSWORD_HASH"
 AUTH_TIMEOUT_ENV = "BUDGETBOT_SESSION_TIMEOUT_MINUTES"
+OPENAI_KEY_ENV = ai.OPENAI_API_KEY_ENV
 AUTH_ITERATIONS = 200_000
 AUTH_SETUP_FILE = ".streamlit/secrets.toml"
 
@@ -349,6 +351,7 @@ with st.sidebar:
             "💳 Debt",
             "🎯 Financial Goals",
             "📈 Reports",
+            "🤖 AI Insights",
         ],
         label_visibility="collapsed",
     )
@@ -367,6 +370,32 @@ with st.sidebar:
         format_func=lambda m: MONTHS[m],
         index=today.month - 1,
     )
+    st.markdown("---")
+
+    # --- OpenAI API key config -------------------------------------------
+    st.subheader("🤖 AI Settings")
+    openai_key = _secret_or_env(OPENAI_KEY_ENV, "")
+    if openai_key:
+        os.environ[OPENAI_KEY_ENV] = openai_key
+        st.markdown(
+            "<span style='color:#16a34a;font-size:0.85rem;'>AI: Configured ✓</span>",
+            unsafe_allow_html=True,
+        )
+    else:
+        with st.expander("Configure OpenAI Key"):
+            new_key = st.text_input("OpenAI API Key", type="password", key="sidebar_openai_key")
+            if st.button("Save Key", key="save_openai_key"):
+                if new_key.strip().startswith("sk-"):
+                    ok, detail = _upsert_local_secrets({OPENAI_KEY_ENV: new_key.strip()})
+                    os.environ[OPENAI_KEY_ENV] = new_key.strip()
+                    if ok:
+                        st.success("Key saved.")
+                        st.rerun()
+                    else:
+                        st.error(f"Could not save: {detail}")
+                else:
+                    st.error("Key must start with 'sk-'.")
+
     st.markdown("---")
     st.caption("Data stored in local SQLite database.")
 
@@ -1002,11 +1031,37 @@ elif page == "🛒 Variable Expenses":
     with entry_col:
         with st.container(border=True):
             st.subheader("Quick Add")
+
+            # --- Live category suggestion (outside the form so it reacts instantly) ---
+            suggest_desc = st.text_input(
+                "Description",
+                key="var_desc_suggest",
+                placeholder="e.g. Starbucks, Walmart, Netflix",
+                help="Type a description to get an AI-powered category suggestion.",
+            )
+            suggest_amount = st.number_input(
+                "Amount ($)", min_value=0.01, step=0.01, format="%.2f", key="var_amount_suggest"
+            )
+            
+            suggested_cat = ""
+            suggestion_source = "none"
+            if suggest_desc.strip():
+                suggested_cat, suggestion_source = ai.suggest_category(
+                    suggest_desc.strip(), suggest_amount, all_var_rows
+                )
+            
+            source_labels = {"history": "📜 from your history", "keyword": "🔑 keyword match", "ai": "🤖 AI suggestion", "none": ""}
+            if suggested_cat:
+                st.caption(f"Suggested: **{suggested_cat}** {source_labels.get(suggestion_source, '')}")
+            
             with st.form("var_form", clear_on_submit=True):
-                var_cat = st.selectbox("Category", VARIABLE_EXPENSE_CATEGORIES)
-                var_amount = st.number_input("Amount ($)", min_value=0.01, step=0.01, format="%.2f")
+                # Pre-select the suggested category if available
+                default_cat_idx = VARIABLE_EXPENSE_CATEGORIES.index(suggested_cat) if suggested_cat in VARIABLE_EXPENSE_CATEGORIES else 0
+                var_cat = st.selectbox("Category", VARIABLE_EXPENSE_CATEGORIES, index=default_cat_idx)
+                var_amount = st.number_input("Amount ($)", min_value=0.01, step=0.01, format="%.2f",
+                                             value=max(suggest_amount, 0.01))
                 var_date = st.date_input("Date", value=today)
-                var_desc = st.text_input("Description (optional)")
+                var_desc = st.text_input("Description (optional)", value=suggest_desc)
                 var_is_recurring = st.checkbox("🔄 Recurring habit (projects forward)")
                 submitted = st.form_submit_button("Add Expense", width="stretch")
                 if submitted:
@@ -1911,3 +1966,197 @@ elif page == "📈 Reports":
                 )
                 fig_debt_yr.update_layout(showlegend=False, height=280, margin=dict(t=40, b=0))
                 st.plotly_chart(fig_debt_yr, width="stretch")
+
+
+# ===========================================================================
+# PAGE: AI INSIGHTS
+# ===========================================================================
+elif page == "🤖 AI Insights":
+    st.title("🤖 AI Insights")
+    st.caption("Powered by OpenAI GPT-4o-mini — only aggregated summary data is sent, never raw transaction descriptions.")
+
+    ai_available = ai.is_ai_available()
+
+    if not ai_available:
+        st.warning(
+            "OpenAI API key not configured. Enter your key in the **🤖 AI Settings** panel in the sidebar to enable AI features."
+        )
+        st.info(
+            "You can still use **Anomaly Detection** below — it runs locally without any API calls."
+        )
+
+    # --- gather data for the selected period --------------------------------
+    ai_income_rows = db.get_income(year=sel_year, month=sel_month)
+    ai_var_rows = db.get_variable_expenses(year=sel_year, month=sel_month)
+    ai_fixed_cost = db.get_monthly_fixed_cost(sel_year, sel_month)
+    ai_goals = db.get_financial_goals()
+    ai_savings_balances = db.get_all_savings_balances()
+    ai_total_savings = sum(ai_savings_balances.values())
+    ai_total_debt = db.get_total_debt()
+
+    ai_total_income = sum(r["amount"] for r in ai_income_rows)
+    ai_total_variable = sum(r["amount"] for r in ai_var_rows)
+    ai_net = ai_total_income - ai_fixed_cost - ai_total_variable
+
+    ai_cat_breakdown: dict[str, float] = {}
+    for r in ai_var_rows:
+        ai_cat_breakdown[r["category"]] = ai_cat_breakdown.get(r["category"], 0.0) + r["amount"]
+
+    # Previous month variable expenses for comparison
+    prev_month = sel_month - 1 if sel_month > 1 else 12
+    prev_year = sel_year if sel_month > 1 else sel_year - 1
+    prev_var_rows = db.get_variable_expenses(year=prev_year, month=prev_month)
+    prev_variable = sum(r["amount"] for r in prev_var_rows) if prev_var_rows else None
+
+    financial_context = {
+        "month": sel_month,
+        "year": sel_year,
+        "total_income": ai_total_income,
+        "fixed_cost": ai_fixed_cost,
+        "variable_cost": ai_total_variable,
+        "net": ai_net,
+        "category_breakdown": ai_cat_breakdown,
+        "total_savings": ai_total_savings,
+        "total_debt": ai_total_debt,
+    }
+
+    # -------------------------------------------------------------------------
+    # Tab 1: Spending Insights   Tab 2: Anomaly Detection   Tab 3: Chat Advisor
+    # -------------------------------------------------------------------------
+    tab_insights, tab_anomalies, tab_chat = st.tabs(
+        ["📊 Spending Insights", "⚠️ Anomaly Detection", "💬 Chat Advisor"]
+    )
+
+    # ----- TAB: SPENDING INSIGHTS -------------------------------------------
+    with tab_insights:
+        st.subheader(f"Spending Insights — {MONTHS[sel_month]} {sel_year}")
+
+        col_kpi1, col_kpi2, col_kpi3, col_kpi4 = st.columns(4)
+        with col_kpi1:
+            st.metric("Income", f"${ai_total_income:,.2f}")
+        with col_kpi2:
+            st.metric("Fixed", f"${ai_fixed_cost:,.2f}")
+        with col_kpi3:
+            st.metric("Variable", f"${ai_total_variable:,.2f}")
+        with col_kpi4:
+            st.metric("Net", f"${ai_net:,.2f}", delta=f"${ai_net:+,.2f}", delta_color="normal" if ai_net >= 0 else "inverse")
+
+        if prev_variable is not None and ai_total_variable > 0:
+            delta_var = ai_total_variable - prev_variable
+            pct = (delta_var / prev_variable * 100) if prev_variable > 0 else 0
+            direction = "up" if delta_var > 0 else "down"
+            st.caption(
+                f"Variable spending is **{direction} {abs(pct):.1f}%** vs {MONTHS[prev_month]} {prev_year} "
+                f"(${prev_variable:,.2f} → ${ai_total_variable:,.2f})"
+            )
+
+        st.markdown("---")
+
+        if ai_available:
+            if not ai_total_income and not ai_var_rows and not ai_fixed_cost:
+                st.info(f"No financial data recorded for {MONTHS[sel_month]} {sel_year}. Add some income and expenses first.")
+            else:
+                cache_key = f"ai_insights_{sel_year}_{sel_month}"
+                if st.button("✨ Generate AI Insights", type="primary"):
+                    with st.spinner("Analysing your finances…"):
+                        insight_text = ai.generate_insights(
+                            month=sel_month,
+                            year=sel_year,
+                            total_income=ai_total_income,
+                            fixed_cost=ai_fixed_cost,
+                            variable_cost=ai_total_variable,
+                            category_breakdown=ai_cat_breakdown,
+                            total_savings=ai_total_savings,
+                            total_debt=ai_total_debt,
+                            goals=ai_goals,
+                            prev_month_variable=prev_variable,
+                        )
+                        st.session_state[cache_key] = insight_text
+
+                if cache_key in st.session_state:
+                    with st.container(border=True):
+                        st.markdown(st.session_state[cache_key])
+                    st.caption("*Generated by GPT-4o-mini. This is informational only, not financial advice.*")
+        else:
+            st.info("Configure your OpenAI API key in the sidebar to generate AI insights.")
+
+    # ----- TAB: ANOMALY DETECTION -------------------------------------------
+    with tab_anomalies:
+        st.subheader("⚠️ Anomaly Detection")
+        st.caption(
+            "Runs entirely locally — no API calls. Flags variable expenses that are unusually high "
+            "compared to your typical spending in that category (2+ standard deviations above average)."
+        )
+
+        # Use last 12 months for a meaningful sample
+        all_recent_var: list[dict] = []
+        for m_offset in range(12):
+            m = (sel_month - 1 - m_offset) % 12 + 1
+            y = sel_year if sel_month - m_offset > 0 else sel_year - 1
+            all_recent_var.extend(db.get_variable_expenses(year=y, month=m))
+
+        threshold = st.slider(
+            "Sensitivity (standard deviations above average to flag)",
+            min_value=1.0, max_value=4.0, value=2.0, step=0.5,
+            help="Lower = more sensitive (more flags). Higher = only extreme outliers.",
+        )
+
+        anomalies = ai.detect_anomalies(all_recent_var, threshold_stdev=float(threshold))
+
+        if anomalies:
+            st.warning(f"Found **{len(anomalies)}** unusual transaction(s) in the last 12 months:")
+            for a in anomalies:
+                with st.container(border=True):
+                    c1, c2, c3 = st.columns([2, 1, 1])
+                    with c1:
+                        st.markdown(f"**{a['date']}** — {a['category']}")
+                        if a["description"]:
+                            st.caption(a["description"])
+                    with c2:
+                        st.metric("Amount", f"${a['amount']:,.2f}")
+                    with c3:
+                        st.metric("Avg for Category", f"${a['avg_for_category']:,.2f}")
+                    st.caption(f"This is **{a['z_score']:.1f}×** standard deviations above your average {a['category']} spend.")
+        else:
+            st.success(
+                "✅ No unusual transactions detected in the last 12 months at the current sensitivity level."
+            )
+
+    # ----- TAB: CHAT ADVISOR ------------------------------------------------
+    with tab_chat:
+        st.subheader("💬 Chat with Your Financial Advisor")
+        st.caption(f"Ask anything about your finances for {MONTHS[sel_month]} {sel_year}.")
+
+        if not ai_available:
+            st.info("Configure your OpenAI API key in the sidebar to use the Chat Advisor.")
+        else:
+            # Initialise conversation history in session state
+            if "ai_chat_history" not in st.session_state:
+                st.session_state["ai_chat_history"] = []
+
+            chat_history: list[dict] = st.session_state["ai_chat_history"]
+
+            # Display conversation
+            for turn in chat_history:
+                with st.chat_message(turn["role"]):
+                    st.markdown(turn["content"])
+
+            # Input
+            user_input = st.chat_input("Ask a question, e.g. 'Am I overspending on food?' or 'How can I save more?'")
+            if user_input:
+                chat_history.append({"role": "user", "content": user_input})
+                with st.chat_message("user"):
+                    st.markdown(user_input)
+
+                with st.chat_message("assistant"):
+                    with st.spinner("Thinking…"):
+                        reply = ai.chat_with_advisor(user_input, chat_history[:-1], financial_context)
+                    st.markdown(reply)
+
+                chat_history.append({"role": "assistant", "content": reply})
+                st.session_state["ai_chat_history"] = chat_history
+
+            if chat_history:
+                if st.button("🗑 Clear conversation", key="clear_chat"):
+                    st.session_state["ai_chat_history"] = []
+                    st.rerun()
