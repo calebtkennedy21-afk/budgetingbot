@@ -517,50 +517,56 @@ if page == "📊 Dashboard":
 
     st.markdown("---")
 
-    # --- upcoming fixed expenses for current and next month --------------------
+    # --- upcoming fixed expenses for current month (today onwards) --------------------
     upcoming_fixed_expenses = []
     fixed_expenses_all = db.get_fixed_expenses(active_only=True)
     
-    # Check current month and next month
-    current_date = date(sel_year, sel_month, 1)
-    next_month = sel_month + 1 if sel_month < 12 else 1
-    next_year = sel_year if sel_month < 12 else sel_year + 1
+    today_date = today
+    last_day_of_month = calendar.monthrange(sel_year, sel_month)[1]
     
     for fe in fixed_expenses_all:
         start_date = date.fromisoformat(fe["start_date"])
         end_date = date.fromisoformat(fe["end_date"]) if fe.get("end_date") else None
         
-        # Check if active during current month or next month
-        if start_date <= current_date and (end_date is None or end_date >= current_date):
-            upcoming_fixed_expenses.append(("current", fe))
-        elif next_month <= 12 and start_date <= date(next_year, next_month, 1) and (end_date is None or end_date >= date(next_year, next_month, 1)):
-            upcoming_fixed_expenses.append(("next", fe))
+        # Calculate due date in current month
+        if fe["frequency"] == "monthly":
+            # Due on the same day of month as start_date
+            try:
+                due_date = date(sel_year, sel_month, start_date.day)
+            except ValueError:
+                # Handle case where day doesn't exist (e.g., Feb 30)
+                due_date = date(sel_year, sel_month, min(start_date.day, last_day_of_month))
+        else:  # yearly
+            # Due on the anniversary in current month
+            try:
+                due_date = date(sel_year, start_date.month, start_date.day)
+            except ValueError:
+                due_date = date(sel_year, start_date.month, min(start_date.day, calendar.monthrange(sel_year, start_date.month)[1]))
+        
+        # Only show if: active, due date is in current month, and today or later
+        if start_date <= today_date and (end_date is None or end_date >= today_date):
+            if due_date.year == sel_year and due_date.month == sel_month and due_date >= today_date:
+                upcoming_fixed_expenses.append((due_date, fe))
+    
+    # Sort by due date
+    upcoming_fixed_expenses.sort(key=lambda x: x[0])
     
     if upcoming_fixed_expenses:
-        st.subheader("⏰ Upcoming Fixed Expenses")
+        st.subheader(f"⏰ Upcoming Fixed Expenses — Rest of {MONTHS[sel_month]}")
         
-        current_month_fes = [fe for period, fe in upcoming_fixed_expenses if period == "current"]
-        next_month_fes = [fe for period, fe in upcoming_fixed_expenses if period == "next"]
-        
-        col_curr, col_next = st.columns(2)
-        
-        with col_curr:
-            st.markdown(f"**{MONTHS[sel_month]} {sel_year}**")
-            if current_month_fes:
-                for fe in current_month_fes:
-                    monthly_eq = fe["amount"] if fe["frequency"] == "monthly" else fe["amount"] / 12
-                    st.write(f"• {fe['name']}: ${monthly_eq:,.2f}")
-            else:
-                st.caption("No upcoming fixed expenses")
-        
-        with col_next:
-            st.markdown(f"**{MONTHS[next_month]} {next_year}**")
-            if next_month_fes:
-                for fe in next_month_fes:
-                    monthly_eq = fe["amount"] if fe["frequency"] == "monthly" else fe["amount"] / 12
-                    st.write(f"• {fe['name']}: ${monthly_eq:,.2f}")
-            else:
-                st.caption("No upcoming fixed expenses")
+        if upcoming_fixed_expenses:
+            for due_date_val, fe in upcoming_fixed_expenses:
+                monthly_eq = fe["amount"] if fe["frequency"] == "monthly" else fe["amount"] / 12
+                days_until = (due_date_val - today_date).days
+                
+                if days_until == 0:
+                    due_text = "🔴 DUE TODAY"
+                else:
+                    due_text = f"📅 {due_date_val.strftime('%b %d')}"
+                
+                st.write(f"• **{fe['name']}** — ${monthly_eq:,.2f} — {due_text}")
+        else:
+            st.caption("No upcoming fixed expenses for the rest of this month")
 
     # --- goals summary ------------------------------------------------------
     if goals:
