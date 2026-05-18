@@ -1117,7 +1117,7 @@ elif page == "🛒 Variable Expenses":
                 df_all = _to_df(all_var_rows)
                 if not df_all.empty:
                     df_all["date"] = pd.to_datetime(df_all["date"])
-                    window_start = pd.Timestamp(today) - pd.Timedelta(days=29)
+                    window_start = pd.Timestamp(today) - pd.Timedelta(days=59)
                     df_30 = df_all[df_all["date"] >= window_start].copy()
                 else:
                     df_30 = pd.DataFrame()
@@ -1128,14 +1128,14 @@ elif page == "🛒 Variable Expenses":
                         df_trend,
                         x="date",
                         y="amount",
-                        title="Last 30 Days Spend",
+                        title="Last 60 Days Spend",
                         labels={"amount": "Amount ($)", "date": "Date"},
                         markers=True,
                     )
                     fig_trend.update_layout(height=280, margin=dict(t=40, b=0))
                     st.plotly_chart(fig_trend, width="stretch")
                 else:
-                    st.info("No variable expenses in the last 30 days.")
+                    st.info("No variable expenses in the last 60 days.")
 
             st.markdown("---")
             tab_labels = ["All", *VARIABLE_EXPENSE_CATEGORIES]
