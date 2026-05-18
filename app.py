@@ -1058,13 +1058,12 @@ elif page == "🛒 Variable Expenses":
                 # Pre-select the suggested category if available
                 default_cat_idx = VARIABLE_EXPENSE_CATEGORIES.index(suggested_cat) if suggested_cat in VARIABLE_EXPENSE_CATEGORIES else 0
                 var_cat = st.selectbox("Category", VARIABLE_EXPENSE_CATEGORIES, index=default_cat_idx)
-                var_amount = st.number_input("Amount ($)", min_value=0.01, step=0.01, format="%.2f",
-                                             value=max(suggest_amount, 0.01))
                 var_date = st.date_input("Date", value=today)
                 var_desc = st.text_input("Description (optional)", value=suggest_desc)
                 var_is_recurring = st.checkbox("🔄 Recurring habit (projects forward)")
                 submitted = st.form_submit_button("Add Expense", width="stretch")
                 if submitted:
+                    var_amount = suggest_amount
                     if var_amount <= 0:
                         st.error("Amount must be greater than zero.")
                     else:
