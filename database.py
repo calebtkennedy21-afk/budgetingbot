@@ -488,7 +488,7 @@ def add_variable_expense(
 ) -> None:
     _write(
         "INSERT INTO variable_expenses (date, amount, category, description, is_recurring) VALUES (%s, %s, %s, %s, %s)",
-        (date, amount, category, description, 1 if is_recurring else 0),
+        (date, amount, category, description, bool(is_recurring)),
     )
 
 
@@ -521,7 +521,7 @@ def update_variable_expense(
                description = %s,
                is_recurring = %s
            WHERE id = %s""",
-        (date, amount, category, description, 1 if is_recurring else 0, record_id),
+        (date, amount, category, description, bool(is_recurring), record_id),
     )
 
 
