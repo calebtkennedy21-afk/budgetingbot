@@ -1314,6 +1314,15 @@ def _route_statement_row(
     }
 
 
+def _statement_owner_defaults(statement_owner: str) -> tuple[str, str]:
+    owner = (statement_owner or "Joint").strip().lower()
+    if owner == "caleb":
+        return "Caleb", "Caleb Savings"
+    if owner == "jamie":
+        return "Jamie", "Jamie Savings"
+    return "Shared Checking", "Joint Savings"
+
+
 def _import_fingerprint(route_payload: dict) -> str:
     route = str(route_payload.get("route", ""))
     txn_date = str(route_payload.get("txn_date", ""))
@@ -1633,6 +1642,20 @@ if page == "🧭 Planning":
                         import_savings_account = st.selectbox("Savings Account", db.SAVINGS_ACCOUNTS, index=min(2, len(db.SAVINGS_ACCOUNTS) - 1))
                     with c6:
                         import_income_source = st.selectbox("Income Source", INCOME_SOURCES, index=min(2, len(INCOME_SOURCES) - 1))
+
+                    if file_type == "pdf":
+                        pdf_owner = st.selectbox(
+                            "PDF Statement Owner",
+                            ["Caleb", "Jamie", "Joint"],
+                            index=2,
+                            help="Choose which household account this PDF statement belongs to so routing defaults match the right source and savings account.",
+                        )
+                        owner_income_source, owner_savings_account = _statement_owner_defaults(pdf_owner)
+                        import_income_source = owner_income_source
+                        import_savings_account = owner_savings_account
+                        st.caption(
+                            f"Default routing for this PDF: income source = {owner_income_source}, savings account = {owner_savings_account}."
+                        )
 
                     debt_rows = db.get_debts()
                     routed_rows: list[dict] = []
