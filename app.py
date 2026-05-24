@@ -1576,17 +1576,98 @@ if page == "🧭 Planning":
                             + ", ".join(f"{route}={count}" for route, count in sorted(summary_counts.items()))
                         )
 
-                        preview_df = pd.DataFrame(routed_rows[:preview_limit]).copy()
-                        if "debt_id" in preview_df.columns:
-                            preview_df = preview_df.drop(columns=["debt_id"])
-                        st.dataframe(preview_df, width="stretch", hide_index=True)
+                        debt_id_to_name = {int(d["id"]): str(d["name"]) for d in debt_rows}
+                        debt_name_to_id = {v: k for k, v in debt_id_to_name.items()}
+                        debt_name_options = ["", *sorted(debt_name_to_id.keys())]
+
+                        editable_rows: list[dict] = []
+                        for idx, rr in enumerate(routed_rows[:preview_limit]):
+                            editable_rows.append(
+                                {
+                                    "row_id": idx,
+                                    "txn_date": rr.get("txn_date", ""),
+                                    "amount": float(rr.get("amount", 0.0)),
+                                    "description": rr.get("description", ""),
+                                    "route": rr.get("route", "variable_expense"),
+                                    "category": rr.get("category", "Other"),
+                                    "source": rr.get("source", import_income_source),
+                                    "savings_account": rr.get("savings_account", import_savings_account),
+                                    "savings_type": rr.get("savings_type", "deposit"),
+                                    "is_recurring": bool(rr.get("is_recurring", False)),
+                                    "debt_name": debt_id_to_name.get(int(rr.get("debt_id", 0)), "") if rr.get("debt_id") else "",
+                                }
+                            )
+
+                        st.caption("Per-row overrides: adjust route/fields before import.")
+                        edited_df = st.data_editor(
+                            pd.DataFrame(editable_rows),
+                            width="stretch",
+                            hide_index=True,
+                            key="import_route_editor",
+                            column_config={
+                                "row_id": st.column_config.NumberColumn("Row", disabled=True),
+                                "txn_date": st.column_config.TextColumn("Date", disabled=True),
+                                "amount": st.column_config.NumberColumn("Amount", disabled=True, format="%.2f"),
+                                "description": st.column_config.TextColumn("Description", disabled=True, width="large"),
+                                "route": st.column_config.SelectboxColumn(
+                                    "Route",
+                                    options=["income", "variable_expense", "savings_transfer", "debt_payment"],
+                                    required=True,
+                                ),
+                                "category": st.column_config.SelectboxColumn(
+                                    "Category",
+                                    options=sorted(set(VARIABLE_EXPENSE_CATEGORIES + INCOME_CATEGORIES + ["Other"])),
+                                ),
+                                "source": st.column_config.SelectboxColumn("Income Source", options=INCOME_SOURCES),
+                                "savings_account": st.column_config.SelectboxColumn("Savings Account", options=db.SAVINGS_ACCOUNTS),
+                                "savings_type": st.column_config.SelectboxColumn("Savings Type", options=["deposit", "withdrawal"]),
+                                "is_recurring": st.column_config.CheckboxColumn("Recurring"),
+                                "debt_name": st.column_config.SelectboxColumn("Debt", options=debt_name_options),
+                            },
+                        )
+                        st.caption("Import uses the edited rows shown above.")
 
                         if st.button("Import Routed Rows", key="import_preview_rows"):
                             imported = 0
                             duplicates = 0
                             failed = 0
 
-                            for rr in routed_rows:
+                            edited_rows = edited_df.to_dict("records") if isinstance(edited_df, pd.DataFrame) else []
+                            for er in edited_rows:
+                                route = str(er.get("route", "variable_expense"))
+                                amount = float(er.get("amount", 0.0))
+                                txn_date = str(er.get("txn_date", ""))
+                                description = str(er.get("description", "") or "")
+
+                                rr: dict = {
+                                    "route": route,
+                                    "txn_date": txn_date,
+                                    "amount": amount,
+                                    "description": description,
+                                }
+                                if route == "income":
+                                    cat = str(er.get("category", "Other"))
+                                    rr["category"] = cat if cat in INCOME_CATEGORIES else "Other"
+                                    rr["source"] = str(er.get("source", import_income_source))
+                                    rr["target"] = f"{rr['source']}:{rr['category']}"
+                                elif route == "variable_expense":
+                                    cat = str(er.get("category", "Other"))
+                                    rr["category"] = cat if cat in VARIABLE_EXPENSE_CATEGORIES else "Other"
+                                    rr["is_recurring"] = bool(er.get("is_recurring", False))
+                                    rr["target"] = rr["category"]
+                                elif route == "savings_transfer":
+                                    rr["savings_account"] = str(er.get("savings_account", import_savings_account))
+                                    rr["savings_type"] = str(er.get("savings_type", "deposit"))
+                                    rr["target"] = rr["savings_account"]
+                                elif route == "debt_payment":
+                                    debt_name = str(er.get("debt_name", "") or "")
+                                    rr["debt_id"] = int(debt_name_to_id.get(debt_name, 0)) if debt_name else 0
+                                    rr["target"] = debt_name or ""
+                                else:
+                                    failed += 1
+                                    continue
+
+                                rr["fingerprint"] = _import_fingerprint(rr)
                                 fp = str(rr["fingerprint"])
                                 if db.has_import_fingerprint(fp):
                                     duplicates += 1
