@@ -2181,36 +2181,36 @@ elif page == "📈 Reports":
         report_debts = db.get_debts()
         if report_debts:
             with _section_card("💳 Debt Overview", "Debt balances are shown for reference and are not included in net calculation."):
-            total_debt_report = sum(d["current_balance"] for d in report_debts)
-            total_orig_report = sum(d["original_amount"] for d in report_debts)
-            rd1, rd2, rd3 = st.columns(3)
-            with rd1:
-                st.metric("Total Remaining Debt", f"${total_debt_report:,.2f}")
-            with rd2:
-                st.metric("Original Debt", f"${total_orig_report:,.2f}")
-            with rd3:
-                st.metric("Total Paid Off", f"${total_orig_report - total_debt_report:,.2f}")
-            df_debts_report = pd.DataFrame(report_debts)
-            df_debt_show = df_debts_report[
-                ["name", "category", "original_amount", "current_balance", "interest_rate", "minimum_payment", "minimum_payment_date"]
-            ].copy()
-            df_debt_show.columns = ["Name", "Category", "Original ($)", "Balance ($)", "APR (%)", "Min Payment ($)", "Due Date"]
-            df_debt_show["Original ($)"] = df_debt_show["Original ($)"].map(lambda x: f"{x:,.2f}")
-            df_debt_show["Balance ($)"] = df_debt_show["Balance ($)"].map(lambda x: f"{x:,.2f}")
-            df_debt_show["APR (%)"] = df_debt_show["APR (%)"].map(lambda x: f"{x:.2f}")
-            df_debt_show["Min Payment ($)"] = df_debt_show["Min Payment ($)"].map(lambda x: f"{x:,.2f}")
-            df_debt_show["Due Date"] = df_debt_show["Due Date"].fillna("—")
-            st.dataframe(df_debt_show, width="stretch", hide_index=True)
-            if len(report_debts) > 1:
-                fig_debt_report = px.bar(
-                    [{"Debt": d["name"], "Balance ($)": d["current_balance"]} for d in report_debts],
-                    x="Debt",
-                    y="Balance ($)",
-                    color="Debt",
-                    title="Remaining Balance by Debt",
-                )
-                fig_debt_report.update_layout(showlegend=False, height=280, margin=dict(t=40, b=0))
-                st.plotly_chart(fig_debt_report, width="stretch")
+                total_debt_report = sum(d["current_balance"] for d in report_debts)
+                total_orig_report = sum(d["original_amount"] for d in report_debts)
+                rd1, rd2, rd3 = st.columns(3)
+                with rd1:
+                    st.metric("Total Remaining Debt", f"${total_debt_report:,.2f}")
+                with rd2:
+                    st.metric("Original Debt", f"${total_orig_report:,.2f}")
+                with rd3:
+                    st.metric("Total Paid Off", f"${total_orig_report - total_debt_report:,.2f}")
+                df_debts_report = pd.DataFrame(report_debts)
+                df_debt_show = df_debts_report[
+                    ["name", "category", "original_amount", "current_balance", "interest_rate", "minimum_payment", "minimum_payment_date"]
+                ].copy()
+                df_debt_show.columns = ["Name", "Category", "Original ($)", "Balance ($)", "APR (%)", "Min Payment ($)", "Due Date"]
+                df_debt_show["Original ($)"] = df_debt_show["Original ($)"].map(lambda x: f"{x:,.2f}")
+                df_debt_show["Balance ($)"] = df_debt_show["Balance ($)"].map(lambda x: f"{x:,.2f}")
+                df_debt_show["APR (%)"] = df_debt_show["APR (%)"].map(lambda x: f"{x:.2f}")
+                df_debt_show["Min Payment ($)"] = df_debt_show["Min Payment ($)"].map(lambda x: f"{x:,.2f}")
+                df_debt_show["Due Date"] = df_debt_show["Due Date"].fillna("—")
+                st.dataframe(df_debt_show, width="stretch", hide_index=True)
+                if len(report_debts) > 1:
+                    fig_debt_report = px.bar(
+                        [{"Debt": d["name"], "Balance ($)": d["current_balance"]} for d in report_debts],
+                        x="Debt",
+                        y="Balance ($)",
+                        color="Debt",
+                        title="Remaining Balance by Debt",
+                    )
+                    fig_debt_report.update_layout(showlegend=False, height=280, margin=dict(t=40, b=0))
+                    st.plotly_chart(fig_debt_report, width="stretch")
 
     else:
         with _section_card(f"Yearly Summary — {sel_year}"):
@@ -2279,36 +2279,36 @@ elif page == "📈 Reports":
         report_debts_yr = db.get_debts()
         if report_debts_yr:
             with _section_card("💳 Debt Overview", "Debt balances are shown for reference and are not included in net calculation."):
-            total_debt_yr = sum(d["current_balance"] for d in report_debts_yr)
-            total_orig_yr = sum(d["original_amount"] for d in report_debts_yr)
-            yd1, yd2, yd3 = st.columns(3)
-            with yd1:
-                st.metric("Total Remaining Debt", f"${total_debt_yr:,.2f}")
-            with yd2:
-                st.metric("Original Debt", f"${total_orig_yr:,.2f}")
-            with yd3:
-                st.metric("Total Paid Off", f"${total_orig_yr - total_debt_yr:,.2f}")
-            df_debts_yr = pd.DataFrame(report_debts_yr)
-            df_debt_yr_show = df_debts_yr[
-                ["name", "category", "original_amount", "current_balance", "interest_rate", "minimum_payment", "minimum_payment_date"]
-            ].copy()
-            df_debt_yr_show.columns = ["Name", "Category", "Original ($)", "Balance ($)", "APR (%)", "Min Payment ($)", "Due Date"]
-            df_debt_yr_show["Original ($)"] = df_debt_yr_show["Original ($)"].map(lambda x: f"{x:,.2f}")
-            df_debt_yr_show["Balance ($)"] = df_debt_yr_show["Balance ($)"].map(lambda x: f"{x:,.2f}")
-            df_debt_yr_show["APR (%)"] = df_debt_yr_show["APR (%)"].map(lambda x: f"{x:.2f}")
-            df_debt_yr_show["Min Payment ($)"] = df_debt_yr_show["Min Payment ($)"].map(lambda x: f"{x:,.2f}")
-            df_debt_yr_show["Due Date"] = df_debt_yr_show["Due Date"].fillna("—")
-            st.dataframe(df_debt_yr_show, width="stretch", hide_index=True)
-            if len(report_debts_yr) > 1:
-                fig_debt_yr = px.bar(
-                    [{"Debt": d["name"], "Balance ($)": d["current_balance"]} for d in report_debts_yr],
-                    x="Debt",
-                    y="Balance ($)",
-                    color="Debt",
-                    title="Remaining Balance by Debt",
-                )
-                fig_debt_yr.update_layout(showlegend=False, height=280, margin=dict(t=40, b=0))
-                st.plotly_chart(fig_debt_yr, width="stretch")
+                total_debt_yr = sum(d["current_balance"] for d in report_debts_yr)
+                total_orig_yr = sum(d["original_amount"] for d in report_debts_yr)
+                yd1, yd2, yd3 = st.columns(3)
+                with yd1:
+                    st.metric("Total Remaining Debt", f"${total_debt_yr:,.2f}")
+                with yd2:
+                    st.metric("Original Debt", f"${total_orig_yr:,.2f}")
+                with yd3:
+                    st.metric("Total Paid Off", f"${total_orig_yr - total_debt_yr:,.2f}")
+                df_debts_yr = pd.DataFrame(report_debts_yr)
+                df_debt_yr_show = df_debts_yr[
+                    ["name", "category", "original_amount", "current_balance", "interest_rate", "minimum_payment", "minimum_payment_date"]
+                ].copy()
+                df_debt_yr_show.columns = ["Name", "Category", "Original ($)", "Balance ($)", "APR (%)", "Min Payment ($)", "Due Date"]
+                df_debt_yr_show["Original ($)"] = df_debt_yr_show["Original ($)"].map(lambda x: f"{x:,.2f}")
+                df_debt_yr_show["Balance ($)"] = df_debt_yr_show["Balance ($)"].map(lambda x: f"{x:,.2f}")
+                df_debt_yr_show["APR (%)"] = df_debt_yr_show["APR (%)"].map(lambda x: f"{x:.2f}")
+                df_debt_yr_show["Min Payment ($)"] = df_debt_yr_show["Min Payment ($)"].map(lambda x: f"{x:,.2f}")
+                df_debt_yr_show["Due Date"] = df_debt_yr_show["Due Date"].fillna("—")
+                st.dataframe(df_debt_yr_show, width="stretch", hide_index=True)
+                if len(report_debts_yr) > 1:
+                    fig_debt_yr = px.bar(
+                        [{"Debt": d["name"], "Balance ($)": d["current_balance"]} for d in report_debts_yr],
+                        x="Debt",
+                        y="Balance ($)",
+                        color="Debt",
+                        title="Remaining Balance by Debt",
+                    )
+                    fig_debt_yr.update_layout(showlegend=False, height=280, margin=dict(t=40, b=0))
+                    st.plotly_chart(fig_debt_yr, width="stretch")
 
 
 # ===========================================================================
