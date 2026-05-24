@@ -1046,6 +1046,72 @@ def _parse_statement_amount(value) -> float | None:
     return amount
 
 
+def _statement_file_to_dataframe(uploaded_file) -> tuple[pd.DataFrame, str, str]:
+    """
+    Parse supported statement files into a normalized dataframe.
+    Returns (df, file_type, error_message).
+    Normalized columns: date, amount, description, category
+    """
+    filename = (uploaded_file.name or "").lower()
+    file_ext = filename.rsplit(".", 1)[-1] if "." in filename else ""
+
+    if file_ext == "csv":
+        try:
+            df_csv = pd.read_csv(uploaded_file)
+            return df_csv, "csv", ""
+        except Exception as exc:
+            return pd.DataFrame(), "csv", f"Could not read CSV: {exc}"
+
+    if file_ext in {"ofx", "qfx"}:
+        try:
+            from io import BytesIO
+            from ofxparse import OfxParser  # type: ignore[import-not-found]
+        except Exception:
+            return (
+                pd.DataFrame(),
+                file_ext,
+                "OFX/QFX parser is unavailable. Install dependency: ofxparse.",
+            )
+
+        try:
+            uploaded_file.seek(0)
+            ofx = OfxParser.parse(BytesIO(uploaded_file.read()))
+        except Exception as exc:
+            return pd.DataFrame(), file_ext, f"Could not parse {file_ext.upper()} file: {exc}"
+
+        normalized_rows: list[dict] = []
+        accounts = []
+        if getattr(ofx, "account", None) is not None:
+            accounts.append(ofx.account)
+        accounts.extend(getattr(ofx, "accounts", []) or [])
+        if not accounts:
+            accounts = [getattr(ofx, "account", None)]
+
+        for acct in [a for a in accounts if a is not None]:
+            for txn in getattr(acct, "statement", {}).transactions if getattr(acct, "statement", None) else []:
+                txn_date = txn.date.date().isoformat() if getattr(txn, "date", None) else ""
+                description = " ".join(
+                    part for part in [
+                        str(getattr(txn, "payee", "") or "").strip(),
+                        str(getattr(txn, "memo", "") or "").strip(),
+                        str(getattr(txn, "type", "") or "").strip(),
+                    ]
+                    if part
+                )
+                normalized_rows.append(
+                    {
+                        "date": txn_date,
+                        "amount": float(getattr(txn, "amount", 0) or 0),
+                        "description": description,
+                        "category": "Other",
+                    }
+                )
+
+        return pd.DataFrame(normalized_rows), file_ext, ""
+
+    return pd.DataFrame(), file_ext or "unknown", "Unsupported file format. Use CSV, OFX, or QFX."
+
+
 def _match_debt_target(description: str, debt_rows: list[dict]) -> dict | None:
     desc = _normalize_text(description)
     if not desc:
@@ -1430,26 +1496,40 @@ if page == "🧭 Planning":
                     _notify("success", "Rule deleted.")
                     st.rerun()
 
-        with _section_card("CSV Import Pipeline", "Import statements into income, expenses, savings transfers, and debt payments with dedupe."):
-            up_file = st.file_uploader("Upload CSV", type=["csv"], key="import_csv")
+        with _section_card("Statement Import Pipeline", "Import CSV/OFX/QFX statements into income, expenses, savings transfers, and debt payments with dedupe."):
+            up_file = st.file_uploader("Upload Statement", type=["csv", "ofx", "qfx"], key="import_csv")
             if up_file is not None:
-                try:
-                    df_raw = pd.read_csv(up_file)
-                except Exception as exc:
-                    _notify("error", f"Could not read CSV: {exc}")
-                    df_raw = pd.DataFrame()
+                df_raw, file_type, parse_error = _statement_file_to_dataframe(up_file)
+                if parse_error:
+                    _notify("error", parse_error)
+                elif file_type in {"ofx", "qfx"}:
+                    st.caption(f"Detected {file_type.upper()} format. Column mapping was auto-applied.")
 
                 if not df_raw.empty:
                     cols = list(df_raw.columns)
                     c1, c2, c3, c4, c5, c6 = st.columns(6)
-                    with c1:
-                        col_date = st.selectbox("Date Column", cols, index=cols.index("date") if "date" in cols else 0)
-                    with c2:
-                        col_amount = st.selectbox("Amount Column", cols, index=cols.index("amount") if "amount" in cols else min(1, len(cols)-1))
-                    with c3:
-                        col_desc = st.selectbox("Description Column", cols, index=cols.index("description") if "description" in cols else min(2, len(cols)-1))
-                    with c4:
-                        col_cat = st.selectbox("Category Column", ["(none)"] + cols)
+                    if file_type == "csv":
+                        with c1:
+                            col_date = st.selectbox("Date Column", cols, index=cols.index("date") if "date" in cols else 0)
+                        with c2:
+                            col_amount = st.selectbox("Amount Column", cols, index=cols.index("amount") if "amount" in cols else min(1, len(cols)-1))
+                        with c3:
+                            col_desc = st.selectbox("Description Column", cols, index=cols.index("description") if "description" in cols else min(2, len(cols)-1))
+                        with c4:
+                            col_cat = st.selectbox("Category Column", ["(none)"] + cols)
+                    else:
+                        col_date = "date"
+                        col_amount = "amount"
+                        col_desc = "description"
+                        col_cat = "category" if "category" in cols else "(none)"
+                        with c1:
+                            st.text_input("Date Column", value=col_date, disabled=True)
+                        with c2:
+                            st.text_input("Amount Column", value=col_amount, disabled=True)
+                        with c3:
+                            st.text_input("Description Column", value=col_desc, disabled=True)
+                        with c4:
+                            st.text_input("Category Column", value=col_cat, disabled=True)
                     with c5:
                         import_savings_account = st.selectbox("Savings Account", db.SAVINGS_ACCOUNTS, index=min(2, len(db.SAVINGS_ACCOUNTS) - 1))
                     with c6:
