@@ -39,6 +39,22 @@ st.set_page_config(
 )
 
 THEME_PRESETS = {
+    "Midnight Ledger": {
+        "bg": "#0d1117",
+        "surface": "#161b22",
+        "surface_strong": "#1f2630",
+        "ink": "#e6edf3",
+        "muted": "#9fb0c3",
+        "accent": "#1f8f80",
+        "accent_2": "#2aa79a",
+        "accent_soft": "#18343b",
+        "warn": "#f08a6b",
+        "good": "#3fb98a",
+        "border": "#2d3847",
+        "shadow": "0 12px 32px rgba(0, 0, 0, 0.45)",
+        "plot_bg": "#111821",
+        "colorway": ["#3fb98a", "#f08a6b", "#68a5ff", "#d6a756", "#9aa6b2", "#7ad1c6"],
+    },
     "Warm Editorial": {
         "bg": "#f6f4ef",
         "surface": "#fcfbf8",
@@ -76,7 +92,7 @@ THEME_PRESETS = {
 
 def _configure_visual_theme(theme_name: str) -> None:
     """Apply app-wide CSS tokens and a shared Plotly chart template."""
-    theme = THEME_PRESETS.get(theme_name, THEME_PRESETS["Warm Editorial"])
+    theme = THEME_PRESETS.get(theme_name, THEME_PRESETS["Midnight Ledger"])
     st.markdown(
         """
 <style>
@@ -103,8 +119,8 @@ html, body, [class*="stApp"] {
 
 .stApp {
     background:
-        radial-gradient(1000px 400px at 10% 5%, rgba(212, 242, 239, 0.65), transparent 65%),
-        radial-gradient(900px 350px at 95% 2%, rgba(244, 200, 180, 0.35), transparent 70%),
+    radial-gradient(1000px 400px at 10% 5%, rgba(46, 118, 109, 0.24), transparent 65%),
+    radial-gradient(900px 350px at 95% 2%, rgba(126, 72, 56, 0.22), transparent 70%),
         var(--bb-bg);
 }
 
@@ -121,18 +137,18 @@ h1, h2, h3 {
 hr {
     border: none;
     height: 1px;
-    background: linear-gradient(90deg, transparent, rgba(95, 107, 122, 0.5), transparent);
+    background: linear-gradient(90deg, transparent, rgba(159, 176, 195, 0.45), transparent);
     margin: 1.2rem 0;
 }
 
 [data-testid="stSidebar"] {
-    background: linear-gradient(180deg, #f2efe7 0%, #ece8de 100%);
+    background: linear-gradient(180deg, #121922 0%, #0f141d 100%);
     border-right: 1px solid var(--bb-border);
 }
 
 [data-testid="stSidebar"] [data-testid="stMarkdownContainer"] p,
 [data-testid="stSidebar"] label {
-    color: #28313d;
+    color: var(--bb-ink) !important;
 }
 
 [data-testid="stMetric"] {
@@ -141,6 +157,27 @@ hr {
     border-radius: 14px;
     box-shadow: var(--bb-shadow);
     padding: 0.85rem 0.95rem;
+}
+
+[data-testid="stMetricLabel"] p,
+[data-testid="stMetricValue"] div,
+[data-testid="stMetricDelta"] div {
+    color: var(--bb-ink) !important;
+    opacity: 1 !important;
+}
+
+[data-testid="stCaptionContainer"] p,
+[data-testid="stMarkdownContainer"] p,
+[data-testid="stMarkdownContainer"] li,
+[data-testid="stMarkdownContainer"] strong,
+[data-testid="stMarkdownContainer"] span {
+    color: var(--bb-ink);
+}
+
+[data-testid="stAppViewContainer"] h1,
+[data-testid="stAppViewContainer"] h2,
+[data-testid="stAppViewContainer"] h3 {
+    color: var(--bb-ink) !important;
 }
 
 [data-testid="stForm"],
@@ -172,21 +209,29 @@ hr {
 
 [data-baseweb="tab"] {
     border-radius: 10px 10px 0 0;
-    background: rgba(15, 118, 110, 0.08);
-    border: 1px solid rgba(15, 118, 110, 0.18);
+    background: rgba(63, 185, 138, 0.13);
+    border: 1px solid rgba(63, 185, 138, 0.26);
     font-weight: 600;
+    color: var(--bb-ink) !important;
 }
 
 [data-baseweb="tab-highlight"] {
-    background-color: #0f766e;
+    background-color: var(--bb-accent);
 }
 
 [data-baseweb="input"] > div,
 [data-baseweb="select"] > div,
 [data-baseweb="textarea"] > div,
 [data-baseweb="base-input"] > div {
-    background: #fffdfa;
-    border-color: #c8c3b5;
+    background: var(--bb-surface);
+    border-color: var(--bb-border);
+}
+
+[data-baseweb="input"] input,
+[data-baseweb="textarea"] textarea,
+[data-baseweb="select"] div,
+[data-baseweb="base-input"] input {
+    color: var(--bb-ink) !important;
 }
 
 [data-testid="stRadio"] label,
@@ -221,7 +266,7 @@ hr {
 }
 
 .bb-page-head {
-    background: linear-gradient(120deg, rgba(15, 118, 110, 0.09), rgba(224, 122, 95, 0.08));
+    background: linear-gradient(120deg, rgba(42, 167, 154, 0.2), rgba(240, 138, 107, 0.14));
     border: 1px solid var(--bb-border);
     border-radius: 16px;
     box-shadow: var(--bb-shadow);
@@ -412,7 +457,7 @@ def _section_card(title: str = "", caption: str = ""):
 
 
 if "visual_theme" not in st.session_state:
-    st.session_state["visual_theme"] = "Warm Editorial"
+    st.session_state["visual_theme"] = "Midnight Ledger"
 
 _configure_visual_theme(st.session_state["visual_theme"])
 
