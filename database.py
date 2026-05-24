@@ -190,6 +190,48 @@ def init_db() -> None:
                         UNIQUE (debt_id, fixed_expense_id, year, month)
                     )
                 """)
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS budget_limits (
+                        id             SERIAL PRIMARY KEY,
+                        category       TEXT   NOT NULL UNIQUE,
+                        monthly_limit  REAL   NOT NULL CHECK(monthly_limit > 0),
+                        created_at     TEXT   NOT NULL
+                                       DEFAULT to_char(now(), 'YYYY-MM-DD HH24:MI:SS')
+                    )
+                """)
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS import_rules (
+                        id             SERIAL PRIMARY KEY,
+                        field          TEXT   NOT NULL DEFAULT 'description' CHECK(field IN ('description','category')),
+                        pattern        TEXT   NOT NULL,
+                        target_category TEXT  NOT NULL,
+                        recurring_flag BOOLEAN NOT NULL DEFAULT FALSE,
+                        priority       INTEGER NOT NULL DEFAULT 100,
+                        created_at     TEXT   NOT NULL
+                                       DEFAULT to_char(now(), 'YYYY-MM-DD HH24:MI:SS')
+                    )
+                """)
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS asset_accounts (
+                        id             SERIAL PRIMARY KEY,
+                        name           TEXT   NOT NULL UNIQUE,
+                        account_type   TEXT   NOT NULL DEFAULT 'cash',
+                        balance        REAL   NOT NULL DEFAULT 0,
+                        updated_at     TEXT   NOT NULL
+                                       DEFAULT to_char(now(), 'YYYY-MM-DD HH24:MI:SS')
+                    )
+                """)
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS net_worth_snapshots (
+                        id                 SERIAL PRIMARY KEY,
+                        snapshot_date      TEXT   NOT NULL,
+                        total_assets       REAL   NOT NULL,
+                        total_liabilities  REAL   NOT NULL,
+                        notes              TEXT,
+                        created_at         TEXT   NOT NULL
+                                         DEFAULT to_char(now(), 'YYYY-MM-DD HH24:MI:SS')
+                    )
+                """)
             conn.commit()
             # Migration: add columns if missing
             with conn.cursor() as cur:
@@ -287,6 +329,40 @@ def init_db() -> None:
                 amount            REAL    NOT NULL,
                 applied_at        TEXT    NOT NULL DEFAULT (datetime('now')),
                 UNIQUE (debt_id, fixed_expense_id, year, month)
+            );
+
+            CREATE TABLE IF NOT EXISTS budget_limits (
+                id             INTEGER PRIMARY KEY AUTOINCREMENT,
+                category       TEXT    NOT NULL UNIQUE,
+                monthly_limit  REAL    NOT NULL CHECK(monthly_limit > 0),
+                created_at     TEXT    NOT NULL DEFAULT (datetime('now'))
+            );
+
+            CREATE TABLE IF NOT EXISTS import_rules (
+                id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                field           TEXT    NOT NULL DEFAULT 'description' CHECK(field IN ('description','category')),
+                pattern         TEXT    NOT NULL,
+                target_category TEXT    NOT NULL,
+                recurring_flag  INTEGER NOT NULL DEFAULT 0,
+                priority        INTEGER NOT NULL DEFAULT 100,
+                created_at      TEXT    NOT NULL DEFAULT (datetime('now'))
+            );
+
+            CREATE TABLE IF NOT EXISTS asset_accounts (
+                id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                name         TEXT    NOT NULL UNIQUE,
+                account_type TEXT    NOT NULL DEFAULT 'cash',
+                balance      REAL    NOT NULL DEFAULT 0,
+                updated_at   TEXT    NOT NULL DEFAULT (datetime('now'))
+            );
+
+            CREATE TABLE IF NOT EXISTS net_worth_snapshots (
+                id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+                snapshot_date      TEXT    NOT NULL,
+                total_assets       REAL    NOT NULL,
+                total_liabilities  REAL    NOT NULL,
+                notes              TEXT,
+                created_at         TEXT    NOT NULL DEFAULT (datetime('now'))
             );
         """)
         conn.commit()
@@ -712,3 +788,106 @@ def get_monthly_fixed_cost(year: int, month: int) -> float:
         else:
             total += r["amount"] / 12
     return total
+
+
+# ---------------------------------------------------------------------------
+# Budget Guardrails (Category Limits)
+# ---------------------------------------------------------------------------
+
+def upsert_budget_limit(category: str, monthly_limit: float) -> None:
+    existing = _read("SELECT id FROM budget_limits WHERE category = %s", (category,))
+    if existing:
+        _write(
+            "UPDATE budget_limits SET monthly_limit = %s WHERE category = %s",
+            (monthly_limit, category),
+        )
+    else:
+        _write(
+            "INSERT INTO budget_limits (category, monthly_limit) VALUES (%s, %s)",
+            (category, monthly_limit),
+        )
+
+
+def get_budget_limits() -> list:
+    return _read("SELECT * FROM budget_limits ORDER BY category")
+
+
+def delete_budget_limit(record_id: int) -> None:
+    _write("DELETE FROM budget_limits WHERE id = %s", (record_id,))
+
+
+# ---------------------------------------------------------------------------
+# Import Rules
+# ---------------------------------------------------------------------------
+
+def add_import_rule(
+    field: str,
+    pattern: str,
+    target_category: str,
+    recurring_flag: bool = False,
+    priority: int = 100,
+) -> None:
+    _write(
+        """INSERT INTO import_rules
+           (field, pattern, target_category, recurring_flag, priority)
+           VALUES (%s, %s, %s, %s, %s)""",
+        (field, pattern, target_category, bool(recurring_flag), int(priority)),
+    )
+
+
+def get_import_rules() -> list:
+    return _read("SELECT * FROM import_rules ORDER BY priority ASC, id ASC")
+
+
+def delete_import_rule(record_id: int) -> None:
+    _write("DELETE FROM import_rules WHERE id = %s", (record_id,))
+
+
+# ---------------------------------------------------------------------------
+# Asset Accounts + Net Worth Snapshots
+# ---------------------------------------------------------------------------
+
+ASSET_ACCOUNT_TYPES = ["cash", "brokerage", "retirement", "property", "other"]
+
+
+def add_asset_account(name: str, account_type: str = "cash", balance: float = 0.0) -> None:
+    _write(
+        "INSERT INTO asset_accounts (name, account_type, balance) VALUES (%s, %s, %s)",
+        (name, account_type, balance),
+    )
+
+
+def get_asset_accounts() -> list:
+    return _read("SELECT * FROM asset_accounts ORDER BY name")
+
+
+def update_asset_account(record_id: int, name: str, account_type: str, balance: float) -> None:
+    _write(
+        """UPDATE asset_accounts
+           SET name = %s,
+               account_type = %s,
+               balance = %s,
+               updated_at = %s
+           WHERE id = %s""",
+        (name, account_type, balance, datetime.now().strftime("%Y-%m-%d %H:%M:%S"), record_id),
+    )
+
+
+def delete_asset_account(record_id: int) -> None:
+    _write("DELETE FROM asset_accounts WHERE id = %s", (record_id,))
+
+
+def add_net_worth_snapshot(snapshot_date: str, total_assets: float, total_liabilities: float, notes: str = "") -> None:
+    _write(
+        """INSERT INTO net_worth_snapshots
+           (snapshot_date, total_assets, total_liabilities, notes)
+           VALUES (%s, %s, %s, %s)""",
+        (snapshot_date, total_assets, total_liabilities, notes),
+    )
+
+
+def get_net_worth_snapshots(limit: int = 36) -> list:
+    rows = _read(
+        "SELECT * FROM net_worth_snapshots ORDER BY snapshot_date DESC"
+    )
+    return rows[: max(1, int(limit))]

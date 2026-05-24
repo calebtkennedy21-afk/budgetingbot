@@ -17,7 +17,7 @@ import html
 import hashlib
 import hmac
 import os
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 
 import pandas as pd
 import plotly.express as px
@@ -780,6 +780,7 @@ with st.sidebar:
             "💳 Debt",
             "🎯 Financial Goals",
             "📈 Reports",
+            "🧭 Planning",
             "🤖 AI Insights",
         ],
         label_visibility="collapsed",
@@ -849,10 +850,494 @@ def _to_df(rows: list, columns: list = None) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
-# ===========================================================================
+def _shift_month(year: int, month: int, offset: int) -> tuple[int, int]:
+    total = (year * 12 + (month - 1)) + offset
+    new_year = total // 12
+    new_month = (total % 12) + 1
+    return new_year, new_month
+
+
+def _avg_variable_spend(year: int, month: int, lookback_months: int = 3, recurring_only: bool | None = None) -> float:
+    amounts: list[float] = []
+    for i in range(lookback_months):
+        y, m = _shift_month(year, month, -i)
+        rows = db.get_variable_expenses(year=y, month=m)
+        if recurring_only is True:
+            rows = [r for r in rows if bool(r.get("is_recurring"))]
+        elif recurring_only is False:
+            rows = [r for r in rows if not bool(r.get("is_recurring"))]
+        amounts.append(sum(float(r["amount"]) for r in rows))
+    if not amounts:
+        return 0.0
+    return sum(amounts) / len(amounts)
+
+
+def _avg_income(year: int, month: int, lookback_months: int = 3) -> float:
+    vals: list[float] = []
+    for i in range(lookback_months):
+        y, m = _shift_month(year, month, -i)
+        rows = db.get_income(year=y, month=m)
+        vals.append(sum(float(r["amount"]) for r in rows))
+    if not vals:
+        return 0.0
+    return sum(vals) / len(vals)
+
+
+def _cashflow_forecast(base_year: int, base_month: int, horizon_months: int = 3) -> list[dict]:
+    debts = db.get_debts()
+    debt_minimum_total = sum(float(d.get("minimum_payment", 0) or 0) for d in debts)
+    out: list[dict] = []
+    for i in range(horizon_months):
+        y, m = _shift_month(base_year, base_month, i)
+        income_rows = db.get_income(year=y, month=m)
+        known_income = sum(float(r["amount"]) for r in income_rows)
+        projected_income = known_income if known_income > 0 else _avg_income(base_year, base_month)
+
+        fixed_cost = db.get_monthly_fixed_cost(y, m)
+        projected_recurring = _avg_variable_spend(base_year, base_month, recurring_only=True)
+        projected_discretionary = _avg_variable_spend(base_year, base_month, recurring_only=False)
+
+        projected_outflow = fixed_cost + projected_recurring + projected_discretionary + debt_minimum_total
+        projected_net = projected_income - projected_outflow
+        safe_to_spend = max(projected_income - fixed_cost - projected_recurring - debt_minimum_total, 0.0)
+        out.append(
+            {
+                "year": y,
+                "month": m,
+                "label": f"{calendar.month_abbr[m]} {y}",
+                "projected_income": projected_income,
+                "fixed_cost": fixed_cost,
+                "recurring_variable": projected_recurring,
+                "discretionary_variable": projected_discretionary,
+                "debt_minimum": debt_minimum_total,
+                "projected_net": projected_net,
+                "safe_to_spend": safe_to_spend,
+            }
+        )
+    return out
+
+
+def _build_bill_calendar(year: int, month: int) -> list[dict]:
+    today_local = date.today()
+    last_day = calendar.monthrange(year, month)[1]
+    items: list[dict] = []
+
+    for fe in db.get_fixed_expenses(active_only=True):
+        start_dt = date.fromisoformat(str(fe["start_date"]))
+        end_dt = date.fromisoformat(str(fe["end_date"])) if fe.get("end_date") else None
+        if start_dt > date(year, month, last_day):
+            continue
+        if end_dt and end_dt < date(year, month, 1):
+            continue
+
+        if fe["frequency"] == "monthly":
+            due_day = min(start_dt.day, last_day)
+            due_dt = date(year, month, due_day)
+        else:
+            if start_dt.month != month:
+                continue
+            due_day = min(start_dt.day, last_day)
+            due_dt = date(year, month, due_day)
+
+        if due_dt < date(year, month, 1) or due_dt > date(year, month, last_day):
+            continue
+
+        days = (due_dt - today_local).days
+        if days < 0:
+            status = "Overdue"
+        elif days <= 7:
+            status = "Due soon"
+        else:
+            status = "Upcoming"
+        items.append(
+            {
+                "type": "Fixed Expense",
+                "name": fe["name"],
+                "due_date": str(due_dt),
+                "amount": float(fe["amount"] if fe["frequency"] == "monthly" else fe["amount"] / 12),
+                "status": status,
+            }
+        )
+
+    for debt in db.get_debts():
+        if not debt.get("minimum_payment_date") or float(debt.get("minimum_payment", 0) or 0) <= 0:
+            continue
+        try:
+            due_seed = date.fromisoformat(str(debt["minimum_payment_date"]))
+        except ValueError:
+            continue
+        due_day = min(due_seed.day, last_day)
+        due_dt = date(year, month, due_day)
+        days = (due_dt - today_local).days
+        if days < 0:
+            status = "Overdue"
+        elif days <= 7:
+            status = "Due soon"
+        else:
+            status = "Upcoming"
+        items.append(
+            {
+                "type": "Debt Minimum",
+                "name": debt["name"],
+                "due_date": str(due_dt),
+                "amount": float(debt["minimum_payment"]),
+                "status": status,
+            }
+        )
+
+    items.sort(key=lambda x: x["due_date"])
+    return items
+
+
+def _apply_import_rules(description: str, current_category: str, rules: list[dict]) -> tuple[str, bool]:
+    desc = (description or "").lower()
+    cat = (current_category or "").lower()
+    for rule in rules:
+        field = (rule.get("field") or "description").lower()
+        pattern = (rule.get("pattern") or "").strip().lower()
+        if not pattern:
+            continue
+        target = desc if field == "description" else cat
+        if pattern in target:
+            return str(rule.get("target_category") or current_category), bool(rule.get("recurring_flag"))
+    return current_category, False
+
+
+# ==========================================================================
+# PAGE: PLANNING
+# ==========================================================================
+if page == "🧭 Planning":
+    _page_header("🧭 Planning", "Forward-looking cash flow, guardrails, debt strategy, net worth, and bulk imports.")
+
+    tab_forecast, tab_guardrails, tab_debt_worth, tab_imports = st.tabs(
+        ["📅 Forecast", "⏰ Bills & Guardrails", "💳 Debt + Net Worth", "📥 Import + Rules"]
+    )
+
+    with tab_forecast:
+        with _section_card("Cash Flow Forecast", "Projects income, expenses, and safe-to-spend for upcoming months."):
+            horizon = st.slider("Forecast Horizon (months)", min_value=1, max_value=12, value=3)
+            forecast_rows = _cashflow_forecast(sel_year, sel_month, horizon_months=int(horizon))
+            df_fc = pd.DataFrame(forecast_rows)
+
+            if not df_fc.empty:
+                c1, c2, c3 = st.columns(3)
+                with c1:
+                    st.metric("Projected Net (Next Month)", f"${df_fc.iloc[0]['projected_net']:,.2f}")
+                with c2:
+                    st.metric("Safe To Spend (Next Month)", f"${df_fc.iloc[0]['safe_to_spend']:,.2f}")
+                with c3:
+                    st.metric("Horizon Net Total", f"${df_fc['projected_net'].sum():,.2f}")
+
+                fig_fc = go.Figure()
+                fig_fc.add_trace(go.Bar(name="Projected Income", x=df_fc["label"], y=df_fc["projected_income"]))
+                fig_fc.add_trace(go.Bar(name="Projected Outflow", x=df_fc["label"], y=(df_fc["fixed_cost"] + df_fc["recurring_variable"] + df_fc["discretionary_variable"] + df_fc["debt_minimum"])))
+                fig_fc.add_trace(go.Scatter(name="Projected Net", x=df_fc["label"], y=df_fc["projected_net"], mode="lines+markers"))
+                fig_fc.update_layout(barmode="group", height=340, margin=dict(t=20, b=0), yaxis_title="Amount ($)")
+                st.plotly_chart(fig_fc, width="stretch")
+
+                df_show = df_fc.copy()
+                for col in ["projected_income", "fixed_cost", "recurring_variable", "discretionary_variable", "debt_minimum", "projected_net", "safe_to_spend"]:
+                    df_show[col] = df_show[col].map(lambda x: f"{x:,.2f}")
+                df_show = df_show.rename(
+                    columns={
+                        "label": "Month",
+                        "projected_income": "Income ($)",
+                        "fixed_cost": "Fixed ($)",
+                        "recurring_variable": "Recurring Var ($)",
+                        "discretionary_variable": "Discretionary Var ($)",
+                        "debt_minimum": "Debt Minimums ($)",
+                        "projected_net": "Projected Net ($)",
+                        "safe_to_spend": "Safe To Spend ($)",
+                    }
+                )
+                st.dataframe(df_show[["Month", "Income ($)", "Fixed ($)", "Recurring Var ($)", "Discretionary Var ($)", "Debt Minimums ($)", "Projected Net ($)", "Safe To Spend ($)"]], width="stretch", hide_index=True)
+
+    with tab_guardrails:
+        with _section_card("Bill Calendar & Reminders", f"Bills for {MONTHS[sel_month]} {sel_year} with due-soon and overdue flags."):
+            bill_items = _build_bill_calendar(sel_year, sel_month)
+            if bill_items:
+                df_bills = pd.DataFrame(bill_items)
+                status_order = {"Overdue": 0, "Due soon": 1, "Upcoming": 2}
+                df_bills["status_rank"] = df_bills["status"].map(status_order).fillna(3)
+                df_bills = df_bills.sort_values(["status_rank", "due_date"]).drop(columns=["status_rank"])
+                st.dataframe(df_bills.rename(columns={"type": "Type", "name": "Name", "due_date": "Due Date", "amount": "Amount ($)", "status": "Status"}), width="stretch", hide_index=True)
+            else:
+                _notify("info", "No upcoming bills detected for this month.")
+
+        with _section_card("Budget Guardrails", "Set category spending limits and monitor usage against monthly caps."):
+            lim_c1, lim_c2 = st.columns([1, 2])
+            with lim_c1:
+                with st.form("add_guardrail_form", clear_on_submit=True):
+                    guard_cat = st.selectbox("Category", VARIABLE_EXPENSE_CATEGORIES)
+                    guard_limit = st.number_input("Monthly Limit ($)", min_value=1.0, step=1.0, format="%.2f")
+                    guard_submit = st.form_submit_button("Save Guardrail", width="stretch")
+                    if guard_submit:
+                        db.upsert_budget_limit(guard_cat, float(guard_limit))
+                        _notify("success", f"Guardrail saved for {guard_cat}.")
+                        st.rerun()
+
+            with lim_c2:
+                limits = db.get_budget_limits()
+                month_rows = db.get_variable_expenses(year=sel_year, month=sel_month)
+                spent_by_cat: dict[str, float] = {}
+                for row in month_rows:
+                    spent_by_cat[row["category"]] = spent_by_cat.get(row["category"], 0.0) + float(row["amount"])
+
+                if limits:
+                    limit_rows = []
+                    for l in limits:
+                        spent = float(spent_by_cat.get(l["category"], 0.0))
+                        cap = float(l["monthly_limit"])
+                        usage = (spent / cap * 100) if cap > 0 else 0.0
+                        status = "Good"
+                        if usage >= 100:
+                            status = "Over"
+                        elif usage >= 90:
+                            status = "Near limit"
+                        limit_rows.append(
+                            {
+                                "ID": int(l["id"]),
+                                "Category": l["category"],
+                                "Limit ($)": f"{cap:,.2f}",
+                                "Spent ($)": f"{spent:,.2f}",
+                                "Usage": f"{usage:.1f}%",
+                                "Status": status,
+                                "Safe To Spend ($)": f"{max(cap - spent, 0.0):,.2f}",
+                            }
+                        )
+                    st.dataframe(pd.DataFrame(limit_rows), width="stretch", hide_index=True)
+
+                    del_id = st.number_input("Delete guardrail by ID", min_value=1, step=1, key="del_guardrail_id")
+                    if st.button("Delete Guardrail", key="del_guardrail_btn"):
+                        db.delete_budget_limit(int(del_id))
+                        _notify("success", "Guardrail deleted.")
+                        st.rerun()
+                else:
+                    st.caption("No guardrails set yet.")
+
+    with tab_debt_worth:
+        with _section_card("Debt Payoff Optimizer", "Compare snowball vs avalanche and model extra monthly payments."):
+            debts = [d for d in db.get_debts() if float(d["current_balance"]) > 0]
+            if debts:
+                strategy = st.radio("Payoff Strategy", ["Snowball (smallest balance first)", "Avalanche (highest APR first)"], horizontal=True)
+                extra_payment = st.number_input("Extra Monthly Payment ($)", min_value=0.0, step=10.0, value=100.0)
+
+                sim_debts = [
+                    {
+                        "name": d["name"],
+                        "balance": float(d["current_balance"]),
+                        "apr": float(d.get("interest_rate", 0) or 0),
+                        "min": float(d.get("minimum_payment", 0) or 0),
+                    }
+                    for d in debts
+                ]
+
+                def debt_sort_key(item: dict):
+                    if strategy.startswith("Snowball"):
+                        return (item["balance"], -item["apr"])
+                    return (-item["apr"], item["balance"])
+
+                months = 0
+                total_interest = 0.0
+                sim_cap = 600
+                while months < sim_cap and any(d["balance"] > 0.01 for d in sim_debts):
+                    months += 1
+                    for d in sim_debts:
+                        if d["balance"] <= 0:
+                            continue
+                        monthly_rate = d["apr"] / 100 / 12
+                        interest = d["balance"] * monthly_rate
+                        d["balance"] += interest
+                        total_interest += interest
+
+                    for d in sim_debts:
+                        if d["balance"] <= 0:
+                            continue
+                        pay = min(d["balance"], d["min"])
+                        d["balance"] -= pay
+
+                    remaining_extra = float(extra_payment)
+                    for d in sorted([x for x in sim_debts if x["balance"] > 0], key=debt_sort_key):
+                        if remaining_extra <= 0:
+                            break
+                        pay = min(d["balance"], remaining_extra)
+                        d["balance"] -= pay
+                        remaining_extra -= pay
+
+                c1, c2, c3 = st.columns(3)
+                with c1:
+                    st.metric("Projected Payoff Time", f"{months} months" if months < sim_cap else "> 600 months")
+                with c2:
+                    st.metric("Estimated Interest", f"${total_interest:,.2f}")
+                with c3:
+                    st.metric("Current Debt", f"${sum(float(d['current_balance']) for d in debts):,.2f}")
+            else:
+                st.caption("No debt balances to optimize yet.")
+
+        with _section_card("Net Worth Tracker", "Track assets, liabilities, and historical net worth snapshots."):
+            asset_rows = db.get_asset_accounts()
+            savings_total = sum(db.get_all_savings_balances().values())
+            debt_total = db.get_total_debt()
+            assets_total = savings_total + sum(float(a["balance"]) for a in asset_rows)
+            net_worth_now = assets_total - debt_total
+
+            nw1, nw2, nw3 = st.columns(3)
+            with nw1:
+                st.metric("Total Assets", f"${assets_total:,.2f}")
+            with nw2:
+                st.metric("Total Liabilities", f"${debt_total:,.2f}")
+            with nw3:
+                st.metric("Net Worth", f"${net_worth_now:,.2f}")
+
+            with st.expander("Manage Asset Accounts"):
+                with st.form("asset_add_form", clear_on_submit=True):
+                    a1, a2, a3 = st.columns(3)
+                    with a1:
+                        asset_name = st.text_input("Account Name")
+                    with a2:
+                        asset_type = st.selectbox("Type", db.ASSET_ACCOUNT_TYPES)
+                    with a3:
+                        asset_balance = st.number_input("Balance ($)", step=10.0, format="%.2f")
+                    add_asset = st.form_submit_button("Add Asset Account")
+                    if add_asset and asset_name.strip():
+                        db.add_asset_account(asset_name.strip(), asset_type, float(asset_balance))
+                        _notify("success", "Asset account added.")
+                        st.rerun()
+
+                if asset_rows:
+                    for a in asset_rows:
+                        with st.form(f"asset_edit_{int(a['id'])}"):
+                            c1, c2, c3 = st.columns(3)
+                            with c1:
+                                e_name = st.text_input("Name", value=a["name"], key=f"asset_name_{int(a['id'])}")
+                            with c2:
+                                type_opts = db.ASSET_ACCOUNT_TYPES
+                                e_type = st.selectbox("Type", type_opts, index=type_opts.index(a["account_type"]) if a["account_type"] in type_opts else 0, key=f"asset_type_{int(a['id'])}")
+                            with c3:
+                                e_bal = st.number_input("Balance ($)", step=10.0, format="%.2f", value=float(a["balance"]), key=f"asset_bal_{int(a['id'])}")
+                            b1, b2 = st.columns(2)
+                            with b1:
+                                save_asset = st.form_submit_button("Save")
+                            with b2:
+                                del_asset = st.form_submit_button("Delete")
+                            if save_asset:
+                                db.update_asset_account(int(a["id"]), e_name.strip(), e_type, float(e_bal))
+                                st.rerun()
+                            if del_asset:
+                                db.delete_asset_account(int(a["id"]))
+                                st.rerun()
+
+            snap_c1, snap_c2 = st.columns([1, 2])
+            with snap_c1:
+                snap_notes = st.text_input("Snapshot Note (optional)", key="nw_snap_note")
+                if st.button("Save Net Worth Snapshot", key="save_nw_snapshot"):
+                    db.add_net_worth_snapshot(str(date.today()), float(assets_total), float(debt_total), snap_notes)
+                    _notify("success", "Snapshot saved.")
+                    st.rerun()
+            with snap_c2:
+                snapshots = db.get_net_worth_snapshots(limit=48)
+                if snapshots:
+                    df_snap = pd.DataFrame(snapshots)
+                    df_snap["net_worth"] = df_snap["total_assets"] - df_snap["total_liabilities"]
+                    df_snap = df_snap.sort_values("snapshot_date")
+                    fig_nw = px.line(df_snap, x="snapshot_date", y="net_worth", markers=True, title="Net Worth Trend")
+                    fig_nw.update_layout(height=280, margin=dict(t=40, b=0))
+                    st.plotly_chart(fig_nw, width="stretch")
+
+    with tab_imports:
+        with _section_card("Import Rules Engine", "Define auto-categorization rules applied during CSV imports."):
+            with st.form("add_import_rule_form", clear_on_submit=True):
+                r1, r2, r3, r4, r5 = st.columns(5)
+                with r1:
+                    rule_field = st.selectbox("Field", ["description", "category"])
+                with r2:
+                    rule_pattern = st.text_input("Pattern", placeholder="e.g. starbucks")
+                with r3:
+                    rule_target = st.selectbox("Target Category", VARIABLE_EXPENSE_CATEGORIES)
+                with r4:
+                    rule_rec = st.checkbox("Recurring")
+                with r5:
+                    rule_priority = st.number_input("Priority", min_value=1, max_value=9999, value=100, step=1)
+                add_rule = st.form_submit_button("Add Rule")
+                if add_rule and rule_pattern.strip():
+                    db.add_import_rule(rule_field, rule_pattern.strip(), rule_target, bool(rule_rec), int(rule_priority))
+                    _notify("success", "Import rule added.")
+                    st.rerun()
+
+            rules = db.get_import_rules()
+            if rules:
+                df_rules = pd.DataFrame(rules)
+                st.dataframe(df_rules[["id", "field", "pattern", "target_category", "recurring_flag", "priority"]], width="stretch", hide_index=True)
+                del_rule_id = st.number_input("Delete rule by ID", min_value=1, step=1, key="del_rule_id")
+                if st.button("Delete Rule", key="del_rule_btn"):
+                    db.delete_import_rule(int(del_rule_id))
+                    _notify("success", "Rule deleted.")
+                    st.rerun()
+
+        with _section_card("CSV Import Pipeline", "Import variable expenses in bulk with preview and rule-based categorization."):
+            up_file = st.file_uploader("Upload CSV", type=["csv"], key="import_csv")
+            if up_file is not None:
+                try:
+                    df_raw = pd.read_csv(up_file)
+                except Exception as exc:
+                    _notify("error", f"Could not read CSV: {exc}")
+                    df_raw = pd.DataFrame()
+
+                if not df_raw.empty:
+                    cols = list(df_raw.columns)
+                    c1, c2, c3, c4 = st.columns(4)
+                    with c1:
+                        col_date = st.selectbox("Date Column", cols, index=cols.index("date") if "date" in cols else 0)
+                    with c2:
+                        col_amount = st.selectbox("Amount Column", cols, index=cols.index("amount") if "amount" in cols else min(1, len(cols)-1))
+                    with c3:
+                        col_desc = st.selectbox("Description Column", cols, index=cols.index("description") if "description" in cols else min(2, len(cols)-1))
+                    with c4:
+                        col_cat = st.selectbox("Category Column", ["(none)"] + cols)
+
+                    preview_rows: list[dict] = []
+                    for _, row in df_raw.head(200).iterrows():
+                        raw_category = "Other" if col_cat == "(none)" else str(row.get(col_cat, "Other") or "Other")
+                        mapped_category, mapped_recurring = _apply_import_rules(
+                            str(row.get(col_desc, "")), raw_category, rules
+                        )
+                        preview_rows.append(
+                            {
+                                "date": str(row.get(col_date, "")),
+                                "amount": float(row.get(col_amount, 0) or 0),
+                                "description": str(row.get(col_desc, "") or ""),
+                                "category": mapped_category if mapped_category in VARIABLE_EXPENSE_CATEGORIES else "Other",
+                                "is_recurring": bool(mapped_recurring),
+                            }
+                        )
+
+                    if preview_rows:
+                        st.caption(f"Previewing {len(preview_rows)} rows (max 200 shown).")
+                        st.dataframe(pd.DataFrame(preview_rows), width="stretch", hide_index=True)
+
+                        if st.button("Import Preview Rows", key="import_preview_rows"):
+                            imported = 0
+                            skipped = 0
+                            for r in preview_rows:
+                                if r["amount"] <= 0 or not r["date"]:
+                                    skipped += 1
+                                    continue
+                                db.add_variable_expense(
+                                    str(r["date"]),
+                                    float(r["amount"]),
+                                    r["category"],
+                                    r["description"],
+                                    bool(r["is_recurring"]),
+                                )
+                                imported += 1
+                            _notify("success", f"Imported {imported} row(s). Skipped {skipped} invalid row(s).")
+                            st.rerun()
+
+
+# ==========================================================================
 # PAGE: DASHBOARD
-# ===========================================================================
-if page == "📊 Dashboard":
+# ==========================================================================
+elif page == "📊 Dashboard":
     _page_header("📊 Dashboard", f"{MONTHS[sel_month]} {sel_year}")
 
     # --- gather data --------------------------------------------------------
@@ -2411,10 +2896,16 @@ elif page == "🤖 AI Insights":
     }
 
     # -------------------------------------------------------------------------
-    # Tab 1: Spending Insights   Tab 2: Anomaly Detection   Tab 3: Chat Advisor
+    # Tabs: Insights, weekly brief, anomaly detection, scenario planner, chat
     # -------------------------------------------------------------------------
-    tab_insights, tab_anomalies, tab_chat = st.tabs(
-        ["📊 Spending Insights", "⚠️ Anomaly Detection", "💬 Chat Advisor"]
+    tab_insights, tab_weekly, tab_anomalies, tab_scenario, tab_chat = st.tabs(
+        [
+            "📊 Spending Insights",
+            "🗓 Weekly Brief",
+            "⚠️ Anomaly Detection",
+            "🧪 Scenario Planner",
+            "💬 Chat Advisor",
+        ]
     )
 
     # ----- TAB: SPENDING INSIGHTS -------------------------------------------
@@ -2468,6 +2959,37 @@ elif page == "🤖 AI Insights":
         else:
             _notify("info", "Configure your OpenAI API key in the sidebar to generate AI insights.")
 
+    # ----- TAB: WEEKLY BRIEF ------------------------------------------------
+    with tab_weekly:
+        with _section_card("🗓 Weekly Financial Brief", "A concise weekly digest with actions and momentum."):
+            if not ai_available:
+                _notify("info", "Configure your OpenAI API key in the sidebar to generate weekly briefs.")
+            else:
+                weekly_events = []
+                if prev_variable is not None:
+                    delta_var = ai_total_variable - prev_variable
+                    weekly_events.append(
+                        {
+                            "label": "Variable spending change vs previous month",
+                            "value": f"${delta_var:+,.2f}",
+                        }
+                    )
+                weekly_events.append(
+                    {
+                        "label": "Current net",
+                        "value": f"${ai_net:,.2f}",
+                    }
+                )
+
+                if st.button("Generate Weekly Brief", key="generate_weekly_brief"):
+                    with st.spinner("Writing your weekly brief..."):
+                        weekly_text = ai.generate_weekly_brief(financial_context, recent_events=weekly_events)
+                        st.session_state[f"weekly_brief_{sel_year}_{sel_month}"] = weekly_text
+
+                cache_key_week = f"weekly_brief_{sel_year}_{sel_month}"
+                if cache_key_week in st.session_state:
+                    st.markdown(st.session_state[cache_key_week])
+
     # ----- TAB: ANOMALY DETECTION -------------------------------------------
     with tab_anomalies:
         with _section_card(
@@ -2507,9 +3029,31 @@ elif page == "🤖 AI Insights":
             else:
                 _notify("success", "✅ No unusual transactions detected in the last 12 months at the current sensitivity level.")
 
+    # ----- TAB: SCENARIO PLANNER -------------------------------------------
+    with tab_scenario:
+        with _section_card("🧪 What-If Scenario Planner", "Model lifestyle or income/expense changes before committing."):
+            if not ai_available:
+                _notify("info", "Configure your OpenAI API key in the sidebar to run scenarios.")
+            else:
+                scenario_input = st.text_area(
+                    "Scenario",
+                    value="What if we reduce takeout by $120/month and add an extra $150/month to debt payments?",
+                    height=100,
+                )
+                if st.button("Run Scenario", key="run_ai_scenario"):
+                    with st.spinner("Simulating scenario..."):
+                        scenario_text = ai.run_scenario_plan(financial_context, scenario_input)
+                        st.session_state[f"scenario_plan_{sel_year}_{sel_month}"] = scenario_text
+
+                cache_key_scn = f"scenario_plan_{sel_year}_{sel_month}"
+                if cache_key_scn in st.session_state:
+                    st.markdown(st.session_state[cache_key_scn])
+
     # ----- TAB: CHAT ADVISOR ------------------------------------------------
     with tab_chat:
         with _section_card("💬 Chat with Your Financial Advisor", f"Ask anything about your finances for {MONTHS[sel_month]} {sel_year}."):
+
+            chat_history: list[dict] = st.session_state.get("ai_chat_history", [])
 
             if not ai_available:
                 _notify("info", "Configure your OpenAI API key in the sidebar to use the Chat Advisor.")
@@ -2518,7 +3062,7 @@ elif page == "🤖 AI Insights":
                 if "ai_chat_history" not in st.session_state:
                     st.session_state["ai_chat_history"] = []
 
-                chat_history: list[dict] = st.session_state["ai_chat_history"]
+                chat_history = st.session_state["ai_chat_history"]
 
                 # Display conversation
                 for turn in chat_history:
@@ -2537,8 +3081,8 @@ elif page == "🤖 AI Insights":
                             reply = ai.chat_with_advisor(user_input, chat_history[:-1], financial_context)
                         st.markdown(reply)
 
-                chat_history.append({"role": "assistant", "content": reply})
-                st.session_state["ai_chat_history"] = chat_history
+                    chat_history.append({"role": "assistant", "content": reply})
+                    st.session_state["ai_chat_history"] = chat_history
 
             if chat_history:
                 if st.button("🗑 Clear conversation", key="clear_chat"):

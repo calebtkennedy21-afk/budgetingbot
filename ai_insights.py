@@ -364,3 +364,118 @@ Do not make up specific numbers not provided above. Keep answers under 150 words
         return response.choices[0].message.content.strip()
     except Exception as exc:
         return f"⚠️ Could not get a response: {exc}"
+
+
+def generate_weekly_brief(financial_context: dict, recent_events: list[dict] | None = None) -> str:
+    """
+    Generate a concise weekly financial brief from aggregate data.
+
+    The output should include:
+      - What changed recently
+      - What to do this week
+      - One encouraging takeaway
+    """
+    client = _get_client()
+    if not client:
+        return "⚠️ OpenAI API key not configured. Add BUDGETBOT_OPENAI_API_KEY to your environment."
+
+    ctx = financial_context
+    month_name = date(ctx.get("year", date.today().year), ctx.get("month", date.today().month), 1).strftime("%B %Y")
+    cat_lines = "\n".join(
+        f"  - {cat}: ${amt:,.2f}"
+        for cat, amt in sorted(ctx.get("category_breakdown", {}).items(), key=lambda x: -x[1])
+    ) or "  - No variable expenses recorded"
+
+    event_lines = "\n".join(
+        f"  - {event.get('label', 'Event')}: {event.get('value', '')}"
+        for event in (recent_events or [])[:10]
+    ) or "  - No notable events were provided"
+
+    prompt = f"""Create a weekly personal finance brief from this data.
+Month context: {month_name}
+Income: ${ctx.get('total_income', 0):,.2f}
+Fixed: ${ctx.get('fixed_cost', 0):,.2f}
+Variable: ${ctx.get('variable_cost', 0):,.2f}
+Net: ${ctx.get('net', 0):,.2f}
+Savings: ${ctx.get('total_savings', 0):,.2f}
+Debt: ${ctx.get('total_debt', 0):,.2f}
+
+Category breakdown:
+{cat_lines}
+
+Recent events:
+{event_lines}
+
+Return exactly three sections:
+1) "What changed" (2 bullets)
+2) "This week actions" (3 bullets, specific and practical)
+3) "Momentum" (1 short positive sentence)
+Keep total under 180 words.
+"""
+
+    try:
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {"role": "system", "content": "You are a concise, practical weekly finance coach."},
+                {"role": "user", "content": prompt},
+            ],
+            max_tokens=350,
+            temperature=0.6,
+        )
+        return response.choices[0].message.content.strip()
+    except Exception as exc:
+        return f"⚠️ Could not generate weekly brief: {exc}"
+
+
+def run_scenario_plan(financial_context: dict, scenario_prompt: str) -> str:
+    """
+    Run a what-if scenario analysis from aggregate financial context.
+    """
+    client = _get_client()
+    if not client:
+        return "⚠️ OpenAI API key not configured. Add BUDGETBOT_OPENAI_API_KEY to your environment."
+
+    ctx = financial_context
+    cat_lines = "\n".join(
+        f"  - {cat}: ${amt:,.2f}"
+        for cat, amt in sorted(ctx.get("category_breakdown", {}).items(), key=lambda x: -x[1])
+    ) or "  - No variable expenses recorded"
+
+    prompt = f"""You are helping with a personal finance what-if analysis.
+
+Current baseline:
+- Income: ${ctx.get('total_income', 0):,.2f}
+- Fixed expenses: ${ctx.get('fixed_cost', 0):,.2f}
+- Variable expenses: ${ctx.get('variable_cost', 0):,.2f}
+- Net: ${ctx.get('net', 0):,.2f}
+- Savings: ${ctx.get('total_savings', 0):,.2f}
+- Debt: ${ctx.get('total_debt', 0):,.2f}
+
+Spending categories:
+{cat_lines}
+
+Scenario request:
+{scenario_prompt}
+
+Respond with:
+1) Estimated monthly impact (range is okay when uncertain)
+2) Main trade-offs and risks
+3) A 3-step action plan to try the scenario safely this month
+
+Keep it concrete and concise. Avoid claiming precision you do not have.
+"""
+
+    try:
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {"role": "system", "content": "You are a pragmatic personal finance scenario planner."},
+                {"role": "user", "content": prompt},
+            ],
+            max_tokens=500,
+            temperature=0.5,
+        )
+        return response.choices[0].message.content.strip()
+    except Exception as exc:
+        return f"⚠️ Could not run scenario plan: {exc}"
