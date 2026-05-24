@@ -1152,13 +1152,25 @@ def _statement_file_to_dataframe(uploaded_file) -> tuple[pd.DataFrame, str, str]
                 amount_matches = amt_pattern.findall(line)
                 if not amount_matches:
                     continue
-                parsed_amount = _parse_statement_amount(amount_matches[-1])
+                parsed_values = [
+                    _parse_statement_amount(token)
+                    for token in amount_matches
+                ]
+                parsed_values = [v for v in parsed_values if v is not None]
+                if not parsed_values:
+                    continue
+
+                # Most statement lines are: date + description + amount + running balance
+                # so prefer first numeric token as txn amount and last as balance.
+                parsed_amount = parsed_values[0]
+                parsed_balance = parsed_values[-1] if len(parsed_values) >= 2 else None
                 if parsed_amount is None:
                     continue
 
                 desc = line
                 desc = desc.replace(date_match.group(1), " ", 1)
-                desc = desc.replace(amount_matches[-1], " ", 1)
+                for token in amount_matches:
+                    desc = desc.replace(token, " ", 1)
                 desc = " ".join(desc.split()).strip("-: ")
                 if not desc:
                     desc = "PDF statement transaction"
@@ -1172,6 +1184,7 @@ def _statement_file_to_dataframe(uploaded_file) -> tuple[pd.DataFrame, str, str]
                     {
                         "date": parsed_date,
                         "amount": float(parsed_amount),
+                        "balance": float(parsed_balance) if parsed_balance is not None else None,
                         "description": desc,
                         "category": "Other",
                     }
