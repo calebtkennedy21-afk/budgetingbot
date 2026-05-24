@@ -12,6 +12,7 @@ Pages
 """
 
 import calendar
+from contextlib import contextmanager
 import html
 import hashlib
 import hmac
@@ -37,9 +38,45 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
+THEME_PRESETS = {
+    "Warm Editorial": {
+        "bg": "#f6f4ef",
+        "surface": "#fcfbf8",
+        "surface_strong": "#ffffff",
+        "ink": "#1f2833",
+        "muted": "#5f6b7a",
+        "accent": "#0f766e",
+        "accent_2": "#13867d",
+        "accent_soft": "#d4f2ef",
+        "warn": "#e07a5f",
+        "good": "#1f8f56",
+        "border": "#d7d3c7",
+        "shadow": "0 10px 30px rgba(31, 40, 51, 0.08)",
+        "plot_bg": "#fffdfa",
+        "colorway": ["#0f766e", "#e07a5f", "#2f5d8c", "#d9a441", "#64748b", "#7f5539"],
+    },
+    "Clean Data Studio": {
+        "bg": "#edf2f7",
+        "surface": "#f8fbff",
+        "surface_strong": "#ffffff",
+        "ink": "#17212b",
+        "muted": "#4b5b6b",
+        "accent": "#0f766e",
+        "accent_2": "#1f9a8f",
+        "accent_soft": "#d7f3ef",
+        "warn": "#d65d48",
+        "good": "#15803d",
+        "border": "#c8d3e1",
+        "shadow": "0 8px 24px rgba(23, 33, 43, 0.08)",
+        "plot_bg": "#f9fbff",
+        "colorway": ["#0f766e", "#2f5d8c", "#d65d48", "#16a34a", "#0ea5e9", "#64748b"],
+    },
+}
 
-def _configure_visual_theme() -> None:
+
+def _configure_visual_theme(theme_name: str) -> None:
     """Apply app-wide CSS tokens and a shared Plotly chart template."""
+    theme = THEME_PRESETS.get(theme_name, THEME_PRESETS["Warm Editorial"])
     st.markdown(
         """
 <style>
@@ -161,8 +198,8 @@ hr {
 [data-testid="stButton"] button,
 [data-testid="baseButton-secondary"] {
     border-radius: 12px;
-    border: 1px solid #0f766e;
-    background: linear-gradient(160deg, #13867d 0%, #0f766e 100%);
+    border: 1px solid var(--bb-accent);
+    background: linear-gradient(160deg, var(--bb-accent-2) 0%, var(--bb-accent) 100%);
     color: #f4f8f7;
     font-weight: 600;
     transition: transform 0.16s ease, box-shadow 0.16s ease;
@@ -276,13 +313,35 @@ hr {
         unsafe_allow_html=True,
     )
 
+    st.markdown(
+        f"""
+<style>
+:root {{
+    --bb-bg: {theme['bg']};
+    --bb-surface: {theme['surface']};
+    --bb-surface-strong: {theme['surface_strong']};
+    --bb-ink: {theme['ink']};
+    --bb-muted: {theme['muted']};
+    --bb-accent: {theme['accent']};
+    --bb-accent-2: {theme['accent_2']};
+    --bb-accent-soft: {theme['accent_soft']};
+    --bb-warn: {theme['warn']};
+    --bb-good: {theme['good']};
+    --bb-border: {theme['border']};
+    --bb-shadow: {theme['shadow']};
+}}
+</style>
+        """,
+        unsafe_allow_html=True,
+    )
+
     pio.templates["budgetingbot"] = go.layout.Template(
         layout=go.Layout(
             paper_bgcolor="rgba(0,0,0,0)",
-            plot_bgcolor="#fffdfa",
-            font={"family": "Space Grotesk, sans-serif", "color": "#1f2833", "size": 13},
-            colorway=["#0f766e", "#e07a5f", "#2f5d8c", "#d9a441", "#64748b", "#7f5539"],
-            title={"font": {"family": "Fraunces, serif", "size": 19, "color": "#1f2833"}},
+            plot_bgcolor=theme["plot_bg"],
+            font={"family": "Space Grotesk, sans-serif", "color": theme["ink"], "size": 13},
+            colorway=theme["colorway"],
+            title={"font": {"family": "Fraunces, serif", "size": 19, "color": theme["ink"]}},
             xaxis={
                 "gridcolor": "rgba(95, 107, 122, 0.15)",
                 "linecolor": "rgba(95, 107, 122, 0.4)",
@@ -331,7 +390,31 @@ def _inline_stat(value: str) -> None:
     st.markdown(f"<div class='bb-inline-stat'>{html.escape(value)}</div>", unsafe_allow_html=True)
 
 
-_configure_visual_theme()
+def _notify(level: str, message: str) -> None:
+    notify_map = {
+        "success": st.success,
+        "warning": st.warning,
+        "info": st.info,
+        "error": st.error,
+    }
+    renderer = notify_map.get(level, st.info)
+    renderer(message)
+
+
+@contextmanager
+def _section_card(title: str = "", caption: str = ""):
+    with st.container(border=True):
+        if title:
+            st.subheader(title)
+        if caption:
+            st.caption(caption)
+        yield
+
+
+if "visual_theme" not in st.session_state:
+    st.session_state["visual_theme"] = "Warm Editorial"
+
+_configure_visual_theme(st.session_state["visual_theme"])
 
 
 # ---------------------------------------------------------------------------
@@ -454,7 +537,7 @@ def _render_login() -> None:
             "⚠️ Action required — save these to Railway to prevent re-setup on restart",
             expanded=True,
         ):
-            st.warning(
+            _notify("warning", 
                 "Your credentials are saved in a local file that is **deleted whenever "
                 "the server container restarts** (Railway, Heroku, etc.). "
                 "Copy the values below into your **Railway → Variables** panel so they "
@@ -475,7 +558,7 @@ def _render_login() -> None:
     password_hash = _secret_or_env(AUTH_HASH_ENV)
 
     if not username or not password_salt or not password_hash:
-        st.warning("Authentication is not configured yet.")
+        _notify("warning", "Authentication is not configured yet.")
         st.subheader("First-Time Setup")
         st.caption("Create your login credentials. The password is stored as a secure hash.")
 
@@ -490,11 +573,11 @@ def _render_login() -> None:
 
             if setup_submitted:
                 if not setup_user.strip():
-                    st.error("Username is required.")
+                    _notify("error", "Username is required.")
                 elif len(setup_password) < 8:
-                    st.error("Password must be at least 8 characters.")
+                    _notify("error", "Password must be at least 8 characters.")
                 elif setup_password != setup_password_confirm:
-                    st.error("Passwords do not match.")
+                    _notify("error", "Passwords do not match.")
                 else:
                     new_salt = os.urandom(16).hex()
                     new_hash = _hash_password(setup_password, new_salt)
@@ -523,7 +606,7 @@ def _render_login() -> None:
         _ = bytes.fromhex(password_salt)
         _ = bytes.fromhex(password_hash)
     except ValueError:
-        st.error("Authentication settings are invalid. Salt/hash must be hex strings.")
+        _notify("error", "Authentication settings are invalid. Salt/hash must be hex strings.")
         st.stop()
 
     with st.form("login_form", clear_on_submit=True):
@@ -543,7 +626,7 @@ def _render_login() -> None:
                 st.session_state.pop("_credential_warning", None)
                 st.rerun()
             else:
-                st.error("Invalid username or password.")
+                _notify("error", "Invalid username or password.")
 
 
 # Load credentials from secrets.toml into env vars so they survive reruns
@@ -563,7 +646,7 @@ except ValueError:
     session_timeout_minutes = 30
 if _is_session_expired(session_timeout_minutes):
     _logout()
-    st.warning("Your session expired. Please log in again.")
+    _notify("warning", "Your session expired. Please log in again.")
 
 if not st.session_state["authenticated"]:
     _render_login()
@@ -622,6 +705,16 @@ MONTHS = {i: calendar.month_name[i] for i in range(1, 13)}
 with st.sidebar:
     st.title("💸 Budgeting Bot")
     st.caption(f"Signed in as: {st.session_state['auth_user']}")
+    selected_theme = st.selectbox(
+        "Visual Theme",
+        list(THEME_PRESETS.keys()),
+        index=list(THEME_PRESETS.keys()).index(st.session_state["visual_theme"]),
+        help="Switch between the warm editorial look and a cleaner data-studio style.",
+    )
+    if selected_theme != st.session_state["visual_theme"]:
+        st.session_state["visual_theme"] = selected_theme
+        st.rerun()
+
     if db_online:
         _status_chip("Database: Online", state="good")
     else:
@@ -677,18 +770,18 @@ with st.sidebar:
                     ok, detail = _upsert_local_secrets({OPENAI_KEY_ENV: new_key.strip()})
                     os.environ[OPENAI_KEY_ENV] = new_key.strip()
                     if ok:
-                        st.success("Key saved.")
+                        _notify("success", "Key saved.")
                         st.rerun()
                     else:
-                        st.error(f"Could not save: {detail}")
+                        _notify("error", f"Could not save: {detail}")
                 else:
-                    st.error("Key must start with 'sk-'.")
+                    _notify("error", "Key must start with 'sk-'.")
 
     st.markdown("---")
     st.caption("Data stored in local SQLite database.")
 
 if not db_online:
-    st.error("Database is offline. Please check your database connection and restart the app.")
+    _notify("error", "Database is offline. Please check your database connection and restart the app.")
     if db_error:
         st.caption(f"Connection error: {db_error}")
     st.stop()
@@ -728,67 +821,62 @@ if page == "📊 Dashboard":
     total_expenses = fixed_cost + total_variable
     net = total_income - total_expenses
 
-    # --- KPI row ------------------------------------------------------------
-    col1, col2, col3, col4 = st.columns(4)
-    with col1:
-        _metric("Total Income", total_income)
-    with col2:
-        _metric("Fixed Expenses", fixed_cost)
-    with col3:
-        _metric("Variable Expenses", total_variable)
-    with col4:
-        color = "normal" if net >= 0 else "inverse"
-        st.metric("Net Balance", f"${net:,.2f}", delta=f"${net:+,.2f}", delta_color=color)
+    with _section_card("Monthly Snapshot", "Core KPIs for your selected period."):
+        col1, col2, col3, col4 = st.columns(4)
+        with col1:
+            _metric("Total Income", total_income)
+        with col2:
+            _metric("Fixed Expenses", fixed_cost)
+        with col3:
+            _metric("Variable Expenses", total_variable)
+        with col4:
+            color = "normal" if net >= 0 else "inverse"
+            st.metric("Net Balance", f"${net:,.2f}", delta=f"${net:+,.2f}", delta_color=color)
 
-    st.markdown("---")
+    with _section_card("Spending Composition", "Where money came from and where it went."):
+        col_left, col_right = st.columns(2)
 
-    # --- expense breakdown pie ----------------------------------------------
-    col_left, col_right = st.columns(2)
+        with col_left:
+            st.subheader("Expense Breakdown")
+            if total_expenses > 0:
+                pie_data = {"Fixed": fixed_cost, "Variable": total_variable}
+                fig = px.pie(
+                    names=list(pie_data.keys()),
+                    values=list(pie_data.values()),
+                    color_discrete_sequence=["#EF553B", "#636EFA"],
+                )
+                fig.update_layout(margin=dict(t=0, b=0, l=0, r=0), height=300)
+                st.plotly_chart(fig, width="stretch")
+            else:
+                _notify("info", "No expenses recorded this month.")
 
-    with col_left:
-        st.subheader("Expense Breakdown")
-        if total_expenses > 0:
-            pie_data = {"Fixed": fixed_cost, "Variable": total_variable}
-            fig = px.pie(
-                names=list(pie_data.keys()),
-                values=list(pie_data.values()),
-                color_discrete_sequence=["#EF553B", "#636EFA"],
+        with col_right:
+            st.subheader("Income vs Expenses")
+            bar_fig = go.Figure(
+                data=[
+                    go.Bar(name="Income", x=["This Month"], y=[total_income], marker_color="#00CC96"),
+                    go.Bar(name="Fixed Exp.", x=["This Month"], y=[fixed_cost], marker_color="#EF553B"),
+                    go.Bar(name="Variable Exp.", x=["This Month"], y=[total_variable], marker_color="#636EFA"),
+                ]
             )
-            fig.update_layout(margin=dict(t=0, b=0, l=0, r=0), height=300)
-            st.plotly_chart(fig, width="stretch")
-        else:
-            st.info("No expenses recorded this month.")
+            bar_fig.update_layout(
+                barmode="group", margin=dict(t=0, b=0), height=300, yaxis_title="Amount ($)"
+            )
+            st.plotly_chart(bar_fig, width="stretch")
 
-    with col_right:
-        st.subheader("Income vs Expenses")
-        bar_fig = go.Figure(
-            data=[
-                go.Bar(name="Income", x=["This Month"], y=[total_income], marker_color="#00CC96"),
-                go.Bar(name="Fixed Exp.", x=["This Month"], y=[fixed_cost], marker_color="#EF553B"),
-                go.Bar(name="Variable Exp.", x=["This Month"], y=[total_variable], marker_color="#636EFA"),
-            ]
-        )
-        bar_fig.update_layout(
-            barmode="group", margin=dict(t=0, b=0), height=300, yaxis_title="Amount ($)"
-        )
-        st.plotly_chart(bar_fig, width="stretch")
-
-    # --- variable expense by category ---------------------------------------
-    if var_rows:
-        st.subheader("Variable Expenses by Category")
-        df_var = pd.DataFrame(var_rows)
-        cat_sum = df_var.groupby("category")["amount"].sum().reset_index()
-        cat_fig = px.bar(
-            cat_sum,
-            x="category",
-            y="amount",
-            labels={"amount": "Amount ($)", "category": "Category"},
-            color="category",
-        )
-        cat_fig.update_layout(showlegend=False, margin=dict(t=0), height=300)
-        st.plotly_chart(cat_fig, width="stretch")
-
-    st.markdown("---")
+        if var_rows:
+            st.subheader("Variable Expenses by Category")
+            df_var = pd.DataFrame(var_rows)
+            cat_sum = df_var.groupby("category")["amount"].sum().reset_index()
+            cat_fig = px.bar(
+                cat_sum,
+                x="category",
+                y="amount",
+                labels={"amount": "Amount ($)", "category": "Category"},
+                color="category",
+            )
+            cat_fig.update_layout(showlegend=False, margin=dict(t=0), height=300)
+            st.plotly_chart(cat_fig, width="stretch")
 
     # --- recurring vs discretionary breakdown ---------------------------------------
     all_var_rows = db.get_variable_expenses(year=sel_year, month=sel_month)
@@ -796,43 +884,42 @@ if page == "📊 Dashboard":
     discretionary_amount = sum(r["amount"] for r in all_var_rows if not r.get("is_recurring"))
     
     if all_var_rows:
-        col_rec_left, col_rec_right = st.columns(2)
-        with col_rec_left:
-            st.subheader("💰 Spending Type Breakdown")
-            if recurring_amount > 0 or discretionary_amount > 0:
-                rec_data = {
-                    "Type": [],
-                    "Amount": [],
-                }
-                if recurring_amount > 0:
-                    rec_data["Type"].append("Recurring Habits")
-                    rec_data["Amount"].append(recurring_amount)
-                if discretionary_amount > 0:
-                    rec_data["Type"].append("Discretionary")
-                    rec_data["Amount"].append(discretionary_amount)
-                
-                if rec_data["Type"]:
-                    fig_rec = px.pie(
-                        rec_data,
-                        names="Type",
-                        values="Amount",
-                        color_discrete_sequence=["#FF6B6B", "#4ECDC4"],
-                    )
-                    fig_rec.update_layout(margin=dict(t=0, b=0, l=0, r=0), height=300)
-                    st.plotly_chart(fig_rec, width="stretch")
-            
-        with col_rec_right:
-            st.subheader("📊 Monthly Forecast")
-            st.markdown("**Based on recurring habits:**")
-            if recurring_amount > 0:
-                st.metric("Recurring Habits This Month", f"${recurring_amount:,.2f}")
-                projected_next = recurring_amount
-                st.metric("Projected Next Month", f"${projected_next:,.2f}", delta=f"${projected_next - discretionary_amount:+,.2f}", delta_color="off")
-                st.caption(f"*Assumes {len([r for r in all_var_rows if r.get('is_recurring')])} recurring habits continue at same rate*")
-            else:
-                st.info("Mark variable expenses as 'recurring habits' to see forecasts.")
+        with _section_card("Recurring vs Discretionary", "Habit spend vs one-off spend and forward view."):
+            col_rec_left, col_rec_right = st.columns(2)
+            with col_rec_left:
+                st.subheader("💰 Spending Type Breakdown")
+                if recurring_amount > 0 or discretionary_amount > 0:
+                    rec_data = {
+                        "Type": [],
+                        "Amount": [],
+                    }
+                    if recurring_amount > 0:
+                        rec_data["Type"].append("Recurring Habits")
+                        rec_data["Amount"].append(recurring_amount)
+                    if discretionary_amount > 0:
+                        rec_data["Type"].append("Discretionary")
+                        rec_data["Amount"].append(discretionary_amount)
 
-    st.markdown("---")
+                    if rec_data["Type"]:
+                        fig_rec = px.pie(
+                            rec_data,
+                            names="Type",
+                            values="Amount",
+                            color_discrete_sequence=["#FF6B6B", "#4ECDC4"],
+                        )
+                        fig_rec.update_layout(margin=dict(t=0, b=0, l=0, r=0), height=300)
+                        st.plotly_chart(fig_rec, width="stretch")
+
+            with col_rec_right:
+                st.subheader("📊 Monthly Forecast")
+                st.markdown("**Based on recurring habits:**")
+                if recurring_amount > 0:
+                    st.metric("Recurring Habits This Month", f"${recurring_amount:,.2f}")
+                    projected_next = recurring_amount
+                    st.metric("Projected Next Month", f"${projected_next:,.2f}", delta=f"${projected_next - discretionary_amount:+,.2f}", delta_color="off")
+                    st.caption(f"*Assumes {len([r for r in all_var_rows if r.get('is_recurring')])} recurring habits continue at same rate*")
+                else:
+                    _notify("info", "Mark variable expenses as 'recurring habits' to see forecasts.")
 
     # --- upcoming fixed expenses for current month (today onwards) --------------------
     upcoming_fixed_expenses = []
@@ -869,58 +956,52 @@ if page == "📊 Dashboard":
     upcoming_fixed_expenses.sort(key=lambda x: x[0])
     
     if upcoming_fixed_expenses:
-        st.subheader(f"⏰ Upcoming Fixed Expenses — Rest of {MONTHS[sel_month]}")
-        
-        if upcoming_fixed_expenses:
+        with _section_card(f"⏰ Upcoming Fixed Expenses — Rest of {MONTHS[sel_month]}"):
             for due_date_val, fe in upcoming_fixed_expenses:
                 monthly_eq = fe["amount"] if fe["frequency"] == "monthly" else fe["amount"] / 12
                 days_until = (due_date_val - today_date).days
-                
+
                 if days_until == 0:
                     due_text = "🔴 DUE TODAY"
                 else:
                     due_text = f"📅 {due_date_val.strftime('%b %d')}"
-                
+
                 st.write(f"• **{fe['name']}** — ${monthly_eq:,.2f} — {due_text}")
-        else:
-            st.caption("No upcoming fixed expenses for the rest of this month")
 
     # --- goals summary ------------------------------------------------------
     if goals:
-        st.subheader("🎯 Goals Progress")
-        for g in goals:
-            pct = min(g["current_amount"] / g["target_amount"] * 100, 100)
-            st.markdown(
-                f"**{g['name']}** — ${g['current_amount']:,.2f} / ${g['target_amount']:,.2f}"
-                + (f"  *(target: {g['target_date']})*" if g["target_date"] else "")
-            )
-            st.progress(pct / 100)
+        with _section_card("🎯 Goals Progress"):
+            for g in goals:
+                pct = min(g["current_amount"] / g["target_amount"] * 100, 100)
+                st.markdown(
+                    f"**{g['name']}** — ${g['current_amount']:,.2f} / ${g['target_amount']:,.2f}"
+                    + (f"  *(target: {g['target_date']})*" if g["target_date"] else "")
+                )
+                st.progress(pct / 100)
 
     # --- savings snapshot ---------------------------------------------------
     savings_balances = db.get_all_savings_balances()
     total_saved = sum(savings_balances.values())
     if total_saved > 0 or any(True for _ in savings_balances):
-        st.markdown("---")
-        st.subheader("💵 Savings Snapshot")
-        sav_cols = st.columns(len(db.SAVINGS_ACCOUNTS) + 1)
-        for i, acct in enumerate(db.SAVINGS_ACCOUNTS):
-            with sav_cols[i]:
-                st.metric(acct, f"${savings_balances[acct]:,.2f}")
-        with sav_cols[-1]:
-            st.metric("Total Savings", f"${total_saved:,.2f}")
+        with _section_card("💵 Savings Snapshot"):
+            sav_cols = st.columns(len(db.SAVINGS_ACCOUNTS) + 1)
+            for i, acct in enumerate(db.SAVINGS_ACCOUNTS):
+                with sav_cols[i]:
+                    st.metric(acct, f"${savings_balances[acct]:,.2f}")
+            with sav_cols[-1]:
+                st.metric("Total Savings", f"${total_saved:,.2f}")
 
     # --- debt snapshot ------------------------------------------------------
     debts_snapshot = db.get_debts()
     total_debt_dash = sum(d["current_balance"] for d in debts_snapshot)
     if debts_snapshot:
-        st.markdown("---")
-        st.subheader("💳 Debt Snapshot")
-        debt_dash_cols = st.columns(min(len(debts_snapshot), 4) + 1)
-        for i, d in enumerate(debts_snapshot[:4]):
-            with debt_dash_cols[i]:
-                st.metric(d["name"], f"${d['current_balance']:,.2f}")
-        with debt_dash_cols[-1]:
-            st.metric("Total Debt", f"${total_debt_dash:,.2f}")
+        with _section_card("💳 Debt Snapshot"):
+            debt_dash_cols = st.columns(min(len(debts_snapshot), 4) + 1)
+            for i, d in enumerate(debts_snapshot[:4]):
+                with debt_dash_cols[i]:
+                    st.metric(d["name"], f"${d['current_balance']:,.2f}")
+            with debt_dash_cols[-1]:
+                st.metric("Total Debt", f"${total_debt_dash:,.2f}")
 
 
 # ===========================================================================
@@ -984,11 +1065,11 @@ elif page == "💰 Income":
                     submitted = st.form_submit_button("Add Income", width="stretch")
                     if submitted:
                         if inc_amount <= 0:
-                            st.error("Amount must be greater than zero.")
+                            _notify("error", "Amount must be greater than zero.")
                         else:
                             db.add_income(str(inc_date), inc_amount, inc_cat,
                                           source, inc_desc)
-                            st.success(f"✅ Added ${inc_amount:,.2f} to {source}.")
+                            _notify("success", f"✅ Added ${inc_amount:,.2f} to {source}.")
                             st.rerun()
 
                 st.markdown(f"**{MONTHS[sel_month]} Entries**")
@@ -1039,11 +1120,11 @@ elif page == "💰 Income":
                                         int(entry["id"]), str(e_date),
                                         float(e_amount), e_cat, e_src, e_desc,
                                     )
-                                    st.success("Entry updated.")
+                                    _notify("success", "Entry updated.")
                                     st.rerun()
                                 if del_it:
                                     db.delete_income(int(entry["id"]))
-                                    st.success("Entry deleted.")
+                                    _notify("success", "Entry deleted.")
                                     st.rerun()
                 else:
                     st.caption(f"No income recorded for {MONTHS[sel_month]}.")
@@ -1139,9 +1220,9 @@ elif page == "📌 Fixed Expenses":
                     submitted = st.form_submit_button(f"Add to {category}", width="stretch")
                     if submitted:
                         if not fix_name.strip():
-                            st.error("Name is required.")
+                            _notify("error", "Name is required.")
                         elif fix_amount <= 0:
-                            st.error("Amount must be greater than zero.")
+                            _notify("error", "Amount must be greater than zero.")
                         else:
                             end_str = str(fix_end) if fix_end else None
                             db.add_fixed_expense(
@@ -1153,7 +1234,7 @@ elif page == "📌 Fixed Expenses":
                                 end_str,
                                 fix_desc,
                             )
-                            st.success(f"✅ Added fixed expense: {fix_name}")
+                            _notify("success", f"✅ Added fixed expense: {fix_name}")
                             st.rerun()
 
                 st.markdown("**Saved Expenses**")
@@ -1250,9 +1331,9 @@ elif page == "📌 Fixed Expenses":
 
                                 if save_changes:
                                     if not edit_name.strip():
-                                        st.error("Name is required.")
+                                        _notify("error", "Name is required.")
                                     elif edit_amount <= 0:
-                                        st.error("Amount must be greater than zero.")
+                                        _notify("error", "Amount must be greater than zero.")
                                     else:
                                         db.update_fixed_expense(
                                             int(expense["id"]),
@@ -1272,19 +1353,19 @@ elif page == "📌 Fixed Expenses":
                                                     int(expense["id"]),
                                                     available_debt_options[selected_debt_label],
                                                 )
-                                        st.success(f"Updated {edit_name.strip()}.")
+                                        _notify("success", f"Updated {edit_name.strip()}.")
                                         st.rerun()
 
                                 if delete_expense:
                                     db.delete_fixed_expense(int(expense["id"]))
-                                    st.success(f"Deleted {expense['name']}.")
+                                    _notify("success", f"Deleted {expense['name']}.")
                                     st.rerun()
                 else:
                     empty_message = "No active expenses in this category yet." if show_active else "No expenses in this category yet."
                     st.caption(empty_message)
 
     if not rows:
-        st.info("No fixed expenses found for the current filter.")
+        _notify("info", "No fixed expenses found for the current filter.")
 
 
 # ===========================================================================
@@ -1334,7 +1415,7 @@ elif page == "🛒 Variable Expenses":
                 if submitted:
                     var_amount = suggest_amount
                     if var_amount <= 0:
-                        st.error("Amount must be greater than zero.")
+                        _notify("error", "Amount must be greater than zero.")
                     else:
                         duplicates = [
                             r for r in all_var_rows
@@ -1343,9 +1424,9 @@ elif page == "🛒 Variable Expenses":
                             and r["category"] == var_cat
                         ]
                         if duplicates:
-                            st.warning("A similar expense already exists for this date/category/amount.")
+                            _notify("warning", "A similar expense already exists for this date/category/amount.")
                         db.add_variable_expense(str(var_date), var_amount, var_cat, var_desc, var_is_recurring)
-                        st.success(f"✅ Added ${var_amount:,.2f} expense on {var_date}.")
+                        _notify("success", f"✅ Added ${var_amount:,.2f} expense on {var_date}.")
                         st.rerun()
 
     with review_col:
@@ -1404,7 +1485,7 @@ elif page == "🛒 Variable Expenses":
                     fig_trend.update_layout(height=280, margin=dict(t=40, b=0))
                     st.plotly_chart(fig_trend, width="stretch")
                 else:
-                    st.info("No variable expenses in the last 60 days.")
+                    _notify("info", "No variable expenses in the last 60 days.")
 
             st.markdown("---")
             tab_labels = ["All", *VARIABLE_EXPENSE_CATEGORIES]
@@ -1439,7 +1520,7 @@ elif page == "🛒 Variable Expenses":
                     df_tab = df_tab[df_tab["amount"] >= float(min_amount)]
 
                     if df_tab.empty:
-                        st.info("No expenses match this filter.")
+                        _notify("info", "No expenses match this filter.")
                     else:
                         df_show = df_tab[["date", "amount", "category", "description"]].copy()
                         df_show.columns = ["Date", "Amount ($)", "Category", "Description"]
@@ -1505,15 +1586,15 @@ elif page == "🛒 Variable Expenses":
                                             edit_desc,
                                             edit_is_recurring,
                                         )
-                                        st.success("Expense updated.")
+                                        _notify("success", "Expense updated.")
                                         st.rerun()
 
                                     if delete_item:
                                         db.delete_variable_expense(int(expense["id"]))
-                                        st.success("Expense deleted.")
+                                        _notify("success", "Expense deleted.")
                                         st.rerun()
         else:
-            st.info("No variable expenses for this period.")
+            _notify("info", "No variable expenses for this period.")
 
 
 # ===========================================================================
@@ -1553,11 +1634,11 @@ elif page == "💵 Savings":
                 submitted = st.form_submit_button("Add Transaction", width="stretch")
                 if submitted:
                     if sav_amount <= 0:
-                        st.error("Amount must be greater than zero.")
+                        _notify("error", "Amount must be greater than zero.")
                     else:
                         current_bal = db.get_savings_balance(sav_account)
                         if sav_type == "withdrawal" and sav_amount > current_bal:
-                            st.error(
+                            _notify("error", 
                                 f"Withdrawal of ${sav_amount:,.2f} exceeds the current "
                                 f"{sav_account} balance of ${current_bal:,.2f}."
                             )
@@ -1566,7 +1647,7 @@ elif page == "💵 Savings":
                                 sav_account, str(sav_date), sav_amount, sav_type, sav_desc
                             )
                             action = "Deposited" if sav_type == "deposit" else "Withdrew"
-                            st.success(
+                            _notify("success", 
                                 f"✅ {action} ${sav_amount:,.2f} {'to' if sav_type == 'deposit' else 'from'} {sav_account}."
                             )
                             st.rerun()
@@ -1676,14 +1757,14 @@ elif page == "💵 Savings":
                                         int(row["id"]), e_acct, str(e_date),
                                         float(e_amount), e_type, e_desc,
                                     )
-                                    st.success("Transaction updated.")
+                                    _notify("success", "Transaction updated.")
                                     st.rerun()
                                 if del_it:
                                     db.delete_savings_transaction(int(row["id"]))
-                                    st.success("Transaction deleted.")
+                                    _notify("success", "Transaction deleted.")
                                     st.rerun()
                 else:
-                    st.info("No savings transactions recorded for this view.")
+                    _notify("info", "No savings transactions recorded for this view.")
 
 
 # ===========================================================================
@@ -1735,11 +1816,11 @@ elif page == "💳 Debt":
             submitted = st.form_submit_button("Add Debt")
             if submitted:
                 if not debt_name.strip():
-                    st.error("Debt name is required.")
+                    _notify("error", "Debt name is required.")
                 elif debt_original <= 0:
-                    st.error("Original amount must be greater than zero.")
+                    _notify("error", "Original amount must be greater than zero.")
                 elif debt_balance > debt_original:
-                    st.error("Current balance cannot exceed the original amount.")
+                    _notify("error", "Current balance cannot exceed the original amount.")
                 else:
                     db.add_debt(
                         debt_name.strip(),
@@ -1751,7 +1832,7 @@ elif page == "💳 Debt":
                         debt_cat,
                         debt_desc,
                     )
-                    st.success(f"✅ Added debt: {debt_name}")
+                    _notify("success", f"✅ Added debt: {debt_name}")
                     st.rerun()
 
     if debts:
@@ -1806,11 +1887,11 @@ elif page == "💳 Debt":
                         )
                         if apply_manual_payment:
                             if payment_amt > d["current_balance"]:
-                                st.error("Payment exceeds remaining balance.")
+                                _notify("error", "Payment exceeds remaining balance.")
                             else:
                                 new_balance = max(d["current_balance"] - payment_amt, 0.0)
                                 db.update_debt_balance(d["id"], new_balance)
-                                st.success(f"Payment of ${payment_amt:,.2f} applied.")
+                                _notify("success", f"Payment of ${payment_amt:,.2f} applied.")
                                 st.rerun()
 
                     if payment_disabled:
@@ -1840,12 +1921,12 @@ elif page == "💳 Debt":
                                         disabled=payment_disabled,
                                     ):
                                         if fe["amount"] > d["current_balance"]:
-                                            st.error("Payment exceeds remaining balance.")
+                                            _notify("error", "Payment exceeds remaining balance.")
                                         else:
                                             db.apply_debt_payment(
                                                 d["id"], fe["id"], sel_year, sel_month, fe["amount"]
                                             )
-                                            st.success(
+                                            _notify("success", 
                                                 f"Applied ${fe['amount']:,.2f} from '{fe['name']}' for {MONTHS[sel_month]} {sel_year}."
                                             )
                                             st.rerun()
@@ -1855,14 +1936,14 @@ elif page == "💳 Debt":
                                     width="stretch",
                                 ):
                                     db.unlink_fixed_expense_from_debt(int(fe["id"]))
-                                    st.success(f"Unlinked '{fe['name']}' from {d['name']}.")
+                                    _notify("success", f"Unlinked '{fe['name']}' from {d['name']}.")
                                     st.rerun()
                     else:
                         st.caption("No fixed expenses linked to this debt.")
 
                     if st.button("Delete Debt", key=f"delete_debt_{d['id']}", width="stretch"):
                         db.delete_debt(int(d["id"]))
-                        st.success(f"Deleted {d['name']}.")
+                        _notify("success", f"Deleted {d['name']}.")
                         st.rerun()
 
         # --- summary chart -------------------------------------------------
@@ -1881,7 +1962,7 @@ elif page == "💳 Debt":
             fig_debt.update_layout(showlegend=False, height=300, margin=dict(t=40, b=0))
             st.plotly_chart(fig_debt, width="stretch")
     else:
-        st.info("No debts recorded yet.")
+        _notify("info", "No debts recorded yet.")
 
 
 # ===========================================================================
@@ -1903,9 +1984,9 @@ elif page == "🎯 Financial Goals":
             submitted = st.form_submit_button("Add Goal")
             if submitted:
                 if not goal_name.strip():
-                    st.error("Goal name is required.")
+                    _notify("error", "Goal name is required.")
                 elif goal_target <= 0:
-                    st.error("Target amount must be greater than zero.")
+                    _notify("error", "Target amount must be greater than zero.")
                 else:
                     db.add_financial_goal(
                         goal_name.strip(),
@@ -1914,7 +1995,7 @@ elif page == "🎯 Financial Goals":
                         str(goal_date) if goal_date else None,
                         goal_desc,
                     )
-                    st.success(f"✅ Goal '{goal_name}' added.")
+                    _notify("success", f"✅ Goal '{goal_name}' added.")
                     st.rerun()
 
     goals = db.get_financial_goals()
@@ -1953,10 +2034,10 @@ elif page == "🎯 Financial Goals":
         del_id = st.number_input("Delete goal by ID", min_value=1, step=1, key="del_goal")
         if st.button("🗑 Delete Goal"):
             db.delete_financial_goal(int(del_id))
-            st.success("Goal deleted.")
+            _notify("success", "Goal deleted.")
             st.rerun()
     else:
-        st.info("No financial goals set yet.")
+        _notify("info", "No financial goals set yet.")
 
 
 # ===========================================================================
@@ -1968,26 +2049,26 @@ elif page == "📈 Reports":
     report_type = st.radio("Report Type", ["Monthly Summary", "Yearly Summary"], horizontal=True)
 
     if report_type == "Monthly Summary":
-        st.subheader(f"Monthly Summary — {MONTHS[sel_month]} {sel_year}")
+        with _section_card(f"Monthly Summary — {MONTHS[sel_month]} {sel_year}"):
 
-        income_rows = db.get_income(year=sel_year, month=sel_month)
-        var_rows = db.get_variable_expenses(year=sel_year, month=sel_month)
-        fixed_cost = db.get_monthly_fixed_cost(sel_year, sel_month)
+            income_rows = db.get_income(year=sel_year, month=sel_month)
+            var_rows = db.get_variable_expenses(year=sel_year, month=sel_month)
+            fixed_cost = db.get_monthly_fixed_cost(sel_year, sel_month)
 
-        total_income = sum(r["amount"] for r in income_rows)
-        total_variable = sum(r["amount"] for r in var_rows)
-        total_expenses = fixed_cost + total_variable
-        net = total_income - total_expenses
+            total_income = sum(r["amount"] for r in income_rows)
+            total_variable = sum(r["amount"] for r in var_rows)
+            total_expenses = fixed_cost + total_variable
+            net = total_income - total_expenses
 
-        c1, c2, c3, c4 = st.columns(4)
-        with c1:
-            st.metric("Income", f"${total_income:,.2f}")
-        with c2:
-            st.metric("Fixed Expenses", f"${fixed_cost:,.2f}")
-        with c3:
-            st.metric("Variable Expenses", f"${total_variable:,.2f}")
-        with c4:
-            st.metric("Net", f"${net:,.2f}", delta=f"${net:+,.2f}", delta_color="normal" if net >= 0 else "inverse")
+            c1, c2, c3, c4 = st.columns(4)
+            with c1:
+                st.metric("Income", f"${total_income:,.2f}")
+            with c2:
+                st.metric("Fixed Expenses", f"${fixed_cost:,.2f}")
+            with c3:
+                st.metric("Variable Expenses", f"${total_variable:,.2f}")
+            with c4:
+                st.metric("Net", f"${net:,.2f}", delta=f"${net:+,.2f}", delta_color="normal" if net >= 0 else "inverse")
 
         # income breakdown
         if income_rows:
@@ -2014,53 +2095,51 @@ elif page == "📈 Reports":
             st.plotly_chart(fig_var, width="stretch")
 
         # table summary
-        st.subheader("Budget Summary Table")
-        summary_data = {
-            "Category": ["Total Income", "Fixed Expenses", "Variable Expenses", "Net Balance"],
-            "Amount ($)": [
-                f"{total_income:,.2f}",
-                f"{fixed_cost:,.2f}",
-                f"{total_variable:,.2f}",
-                f"{net:,.2f}",
-            ],
-        }
-        st.table(pd.DataFrame(summary_data))
+        with _section_card("Budget Summary Table"):
+            summary_data = {
+                "Category": ["Total Income", "Fixed Expenses", "Variable Expenses", "Net Balance"],
+                "Amount ($)": [
+                    f"{total_income:,.2f}",
+                    f"{fixed_cost:,.2f}",
+                    f"{total_variable:,.2f}",
+                    f"{net:,.2f}",
+                ],
+            }
+            st.table(pd.DataFrame(summary_data))
 
         # --- surplus allocation suggestions (only when net positive) --------
         if net > 0:
-            st.markdown("---")
-            st.subheader("💡 Surplus Allocation Suggestions")
-            st.caption(
-                f"You have a surplus of **${net:,.2f}** this month. "
-                "Adjust the sliders to see how different splits would look."
-            )
+            with _section_card(
+                "💡 Surplus Allocation Suggestions",
+                f"You have a surplus of ${net:,.2f} this month. Adjust the sliders to model different splits.",
+            ):
 
-            col_s, col_d, col_g = st.columns(3)
-            with col_s:
-                pct_savings = st.slider("Savings %", 0, 100, 50, 5, key="alloc_savings")
-            with col_d:
-                max_debt = 100 - pct_savings
-                pct_debt = st.slider("Debt Paydown %", 0, max_debt, min(30, max_debt), 5, key="alloc_debt")
-            with col_g:
-                max_goals = 100 - pct_savings - pct_debt
-                pct_goals = st.slider("Financial Goals %", 0, max_goals, min(20, max_goals), 5, key="alloc_goals")
+                col_s, col_d, col_g = st.columns(3)
+                with col_s:
+                    pct_savings = st.slider("Savings %", 0, 100, 50, 5, key="alloc_savings")
+                with col_d:
+                    max_debt = 100 - pct_savings
+                    pct_debt = st.slider("Debt Paydown %", 0, max_debt, min(30, max_debt), 5, key="alloc_debt")
+                with col_g:
+                    max_goals = 100 - pct_savings - pct_debt
+                    pct_goals = st.slider("Financial Goals %", 0, max_goals, min(20, max_goals), 5, key="alloc_goals")
 
-            pct_unallocated = 100 - pct_savings - pct_debt - pct_goals
+                pct_unallocated = 100 - pct_savings - pct_debt - pct_goals
 
-            amt_savings = net * pct_savings / 100
-            amt_debt    = net * pct_debt / 100
-            amt_goals   = net * pct_goals / 100
-            amt_unallocated = net * pct_unallocated / 100
+                amt_savings = net * pct_savings / 100
+                amt_debt    = net * pct_debt / 100
+                amt_goals   = net * pct_goals / 100
+                amt_unallocated = net * pct_unallocated / 100
 
-            a1, a2, a3, a4 = st.columns(4)
-            with a1:
-                st.metric("💵 Into Savings", f"${amt_savings:,.2f}", f"{pct_savings}%")
-            with a2:
-                st.metric("💳 Debt Paydown", f"${amt_debt:,.2f}", f"{pct_debt}%")
-            with a3:
-                st.metric("🎯 Financial Goals", f"${amt_goals:,.2f}", f"{pct_goals}%")
-            with a4:
-                st.metric("➕ Unallocated Net Positive", f"${amt_unallocated:,.2f}", f"{pct_unallocated}%")
+                a1, a2, a3, a4 = st.columns(4)
+                with a1:
+                    st.metric("💵 Into Savings", f"${amt_savings:,.2f}", f"{pct_savings}%")
+                with a2:
+                    st.metric("💳 Debt Paydown", f"${amt_debt:,.2f}", f"{pct_debt}%")
+                with a3:
+                    st.metric("🎯 Financial Goals", f"${amt_goals:,.2f}", f"{pct_goals}%")
+                with a4:
+                    st.metric("➕ Unallocated Net Positive", f"${amt_unallocated:,.2f}", f"{pct_unallocated}%")
 
             # context: how far does each bucket go?
             hints = []
@@ -2083,27 +2162,25 @@ elif page == "📈 Reports":
             if amt_savings > 0:
                 hints.append(f"Your savings balance would grow to **${total_savings_hint + amt_savings:,.2f}** after this month.")
 
-            if hints:
-                for hint in hints:
-                    st.info(hint)
+                if hints:
+                    for hint in hints:
+                        _notify("info", hint)
 
             # donut chart of the split
-            if pct_savings + pct_debt + pct_goals + pct_unallocated > 0:
-                fig_alloc = px.pie(
-                    names=["Savings", "Debt Paydown", "Financial Goals", "Unallocated"],
-                    values=[amt_savings, amt_debt, amt_goals, amt_unallocated],
-                    hole=0.5,
-                    color_discrete_sequence=["#00CC96", "#EF553B", "#636EFA", "#A3A3A3"],
-                )
-                fig_alloc.update_layout(height=280, margin=dict(t=10, b=0))
-                st.plotly_chart(fig_alloc, width="stretch")
+                if pct_savings + pct_debt + pct_goals + pct_unallocated > 0:
+                    fig_alloc = px.pie(
+                        names=["Savings", "Debt Paydown", "Financial Goals", "Unallocated"],
+                        values=[amt_savings, amt_debt, amt_goals, amt_unallocated],
+                        hole=0.5,
+                        color_discrete_sequence=["#00CC96", "#EF553B", "#636EFA", "#A3A3A3"],
+                    )
+                    fig_alloc.update_layout(height=280, margin=dict(t=10, b=0))
+                    st.plotly_chart(fig_alloc, width="stretch")
 
         # --- debt overview (informational only, not included in net) --------
         report_debts = db.get_debts()
         if report_debts:
-            st.markdown("---")
-            st.subheader("💳 Debt Overview")
-            st.caption("Debt balances are shown for reference and are not included in the net calculation.")
+            with _section_card("💳 Debt Overview", "Debt balances are shown for reference and are not included in net calculation."):
             total_debt_report = sum(d["current_balance"] for d in report_debts)
             total_orig_report = sum(d["original_amount"] for d in report_debts)
             rd1, rd2, rd3 = st.columns(3)
@@ -2136,74 +2213,72 @@ elif page == "📈 Reports":
                 st.plotly_chart(fig_debt_report, width="stretch")
 
     else:
-        st.subheader(f"Yearly Summary — {sel_year}")
+        with _section_card(f"Yearly Summary — {sel_year}"):
 
-        months_data = []
-        for m in range(1, 13):
-            inc = db.get_income(year=sel_year, month=m)
-            var = db.get_variable_expenses(year=sel_year, month=m)
-            fixed = db.get_monthly_fixed_cost(sel_year, m)
-            total_inc = sum(r["amount"] for r in inc)
-            total_var = sum(r["amount"] for r in var)
-            total_exp = fixed + total_var
-            months_data.append(
-                {
-                    "Month": calendar.month_abbr[m],
-                    "Income": total_inc,
-                    "Fixed": fixed,
-                    "Variable": total_var,
-                    "Total Expenses": total_exp,
-                    "Net": total_inc - total_exp,
-                }
-            )
+            months_data = []
+            for m in range(1, 13):
+                inc = db.get_income(year=sel_year, month=m)
+                var = db.get_variable_expenses(year=sel_year, month=m)
+                fixed = db.get_monthly_fixed_cost(sel_year, m)
+                total_inc = sum(r["amount"] for r in inc)
+                total_var = sum(r["amount"] for r in var)
+                total_exp = fixed + total_var
+                months_data.append(
+                    {
+                        "Month": calendar.month_abbr[m],
+                        "Income": total_inc,
+                        "Fixed": fixed,
+                        "Variable": total_var,
+                        "Total Expenses": total_exp,
+                        "Net": total_inc - total_exp,
+                    }
+                )
 
-        df_yr = pd.DataFrame(months_data)
+            df_yr = pd.DataFrame(months_data)
 
-        # KPIs
-        yr_income = df_yr["Income"].sum()
-        yr_fixed = df_yr["Fixed"].sum()
-        yr_variable = df_yr["Variable"].sum()
-        yr_net = df_yr["Net"].sum()
+            # KPIs
+            yr_income = df_yr["Income"].sum()
+            yr_fixed = df_yr["Fixed"].sum()
+            yr_variable = df_yr["Variable"].sum()
+            yr_net = df_yr["Net"].sum()
 
-        c1, c2, c3, c4 = st.columns(4)
-        with c1:
-            st.metric("Yearly Income", f"${yr_income:,.2f}")
-        with c2:
-            st.metric("Fixed Expenses", f"${yr_fixed:,.2f}")
-        with c3:
-            st.metric("Variable Expenses", f"${yr_variable:,.2f}")
-        with c4:
-            st.metric("Net Balance", f"${yr_net:,.2f}", delta=f"${yr_net:+,.2f}", delta_color="normal" if yr_net >= 0 else "inverse")
+            c1, c2, c3, c4 = st.columns(4)
+            with c1:
+                st.metric("Yearly Income", f"${yr_income:,.2f}")
+            with c2:
+                st.metric("Fixed Expenses", f"${yr_fixed:,.2f}")
+            with c3:
+                st.metric("Variable Expenses", f"${yr_variable:,.2f}")
+            with c4:
+                st.metric("Net Balance", f"${yr_net:,.2f}", delta=f"${yr_net:+,.2f}", delta_color="normal" if yr_net >= 0 else "inverse")
 
-        # monthly trend line
-        fig_trend = go.Figure()
-        fig_trend.add_trace(go.Scatter(x=df_yr["Month"], y=df_yr["Income"], name="Income", mode="lines+markers", line=dict(color="#00CC96")))
-        fig_trend.add_trace(go.Scatter(x=df_yr["Month"], y=df_yr["Total Expenses"], name="Total Expenses", mode="lines+markers", line=dict(color="#EF553B")))
-        fig_trend.add_trace(go.Scatter(x=df_yr["Month"], y=df_yr["Net"], name="Net", mode="lines+markers", line=dict(color="#636EFA", dash="dot")))
-        fig_trend.update_layout(title="Monthly Income vs Expenses", yaxis_title="Amount ($)", height=400)
-        st.plotly_chart(fig_trend, width="stretch")
+            # monthly trend line
+            fig_trend = go.Figure()
+            fig_trend.add_trace(go.Scatter(x=df_yr["Month"], y=df_yr["Income"], name="Income", mode="lines+markers", line=dict(color="#00CC96")))
+            fig_trend.add_trace(go.Scatter(x=df_yr["Month"], y=df_yr["Total Expenses"], name="Total Expenses", mode="lines+markers", line=dict(color="#EF553B")))
+            fig_trend.add_trace(go.Scatter(x=df_yr["Month"], y=df_yr["Net"], name="Net", mode="lines+markers", line=dict(color="#636EFA", dash="dot")))
+            fig_trend.update_layout(title="Monthly Income vs Expenses", yaxis_title="Amount ($)", height=400)
+            st.plotly_chart(fig_trend, width="stretch")
 
-        # monthly breakdown bar
-        fig_bar = go.Figure(data=[
-            go.Bar(name="Fixed", x=df_yr["Month"], y=df_yr["Fixed"], marker_color="#EF553B"),
-            go.Bar(name="Variable", x=df_yr["Month"], y=df_yr["Variable"], marker_color="#636EFA"),
-        ])
-        fig_bar.update_layout(barmode="stack", title="Monthly Expense Breakdown", yaxis_title="Amount ($)", height=350)
-        st.plotly_chart(fig_bar, width="stretch")
+            # monthly breakdown bar
+            fig_bar = go.Figure(data=[
+                go.Bar(name="Fixed", x=df_yr["Month"], y=df_yr["Fixed"], marker_color="#EF553B"),
+                go.Bar(name="Variable", x=df_yr["Month"], y=df_yr["Variable"], marker_color="#636EFA"),
+            ])
+            fig_bar.update_layout(barmode="stack", title="Monthly Expense Breakdown", yaxis_title="Amount ($)", height=350)
+            st.plotly_chart(fig_bar, width="stretch")
 
-        # data table
-        st.subheader("Monthly Details")
-        df_display = df_yr.copy()
-        for col in ["Income", "Fixed", "Variable", "Total Expenses", "Net"]:
-            df_display[col] = df_display[col].map(lambda x: f"${x:,.2f}")
-        st.dataframe(df_display, width="stretch", hide_index=True)
+            # data table
+            st.subheader("Monthly Details")
+            df_display = df_yr.copy()
+            for col in ["Income", "Fixed", "Variable", "Total Expenses", "Net"]:
+                df_display[col] = df_display[col].map(lambda x: f"${x:,.2f}")
+            st.dataframe(df_display, width="stretch", hide_index=True)
 
         # --- debt overview (informational only, not included in net) --------
         report_debts_yr = db.get_debts()
         if report_debts_yr:
-            st.markdown("---")
-            st.subheader("💳 Debt Overview")
-            st.caption("Debt balances are shown for reference and are not included in the net calculation.")
+            with _section_card("💳 Debt Overview", "Debt balances are shown for reference and are not included in net calculation."):
             total_debt_yr = sum(d["current_balance"] for d in report_debts_yr)
             total_orig_yr = sum(d["original_amount"] for d in report_debts_yr)
             yd1, yd2, yd3 = st.columns(3)
@@ -2248,10 +2323,10 @@ elif page == "🤖 AI Insights":
     ai_available = ai.is_ai_available()
 
     if not ai_available:
-        st.warning(
+        _notify("warning", 
             "OpenAI API key not configured. Enter your key in the **🤖 AI Settings** panel in the sidebar to enable AI features."
         )
-        st.info(
+        _notify("info", 
             "You can still use **Anomaly Detection** below — it runs locally without any API calls."
         )
 
@@ -2299,32 +2374,30 @@ elif page == "🤖 AI Insights":
 
     # ----- TAB: SPENDING INSIGHTS -------------------------------------------
     with tab_insights:
-        st.subheader(f"Spending Insights — {MONTHS[sel_month]} {sel_year}")
+        with _section_card(f"Spending Insights — {MONTHS[sel_month]} {sel_year}"):
 
-        col_kpi1, col_kpi2, col_kpi3, col_kpi4 = st.columns(4)
-        with col_kpi1:
-            st.metric("Income", f"${ai_total_income:,.2f}")
-        with col_kpi2:
-            st.metric("Fixed", f"${ai_fixed_cost:,.2f}")
-        with col_kpi3:
-            st.metric("Variable", f"${ai_total_variable:,.2f}")
-        with col_kpi4:
-            st.metric("Net", f"${ai_net:,.2f}", delta=f"${ai_net:+,.2f}", delta_color="normal" if ai_net >= 0 else "inverse")
+            col_kpi1, col_kpi2, col_kpi3, col_kpi4 = st.columns(4)
+            with col_kpi1:
+                st.metric("Income", f"${ai_total_income:,.2f}")
+            with col_kpi2:
+                st.metric("Fixed", f"${ai_fixed_cost:,.2f}")
+            with col_kpi3:
+                st.metric("Variable", f"${ai_total_variable:,.2f}")
+            with col_kpi4:
+                st.metric("Net", f"${ai_net:,.2f}", delta=f"${ai_net:+,.2f}", delta_color="normal" if ai_net >= 0 else "inverse")
 
-        if prev_variable is not None and ai_total_variable > 0:
-            delta_var = ai_total_variable - prev_variable
-            pct = (delta_var / prev_variable * 100) if prev_variable > 0 else 0
-            direction = "up" if delta_var > 0 else "down"
-            st.caption(
-                f"Variable spending is **{direction} {abs(pct):.1f}%** vs {MONTHS[prev_month]} {prev_year} "
-                f"(${prev_variable:,.2f} → ${ai_total_variable:,.2f})"
-            )
-
-        st.markdown("---")
+            if prev_variable is not None and ai_total_variable > 0:
+                delta_var = ai_total_variable - prev_variable
+                pct = (delta_var / prev_variable * 100) if prev_variable > 0 else 0
+                direction = "up" if delta_var > 0 else "down"
+                st.caption(
+                    f"Variable spending is **{direction} {abs(pct):.1f}%** vs {MONTHS[prev_month]} {prev_year} "
+                    f"(${prev_variable:,.2f} → ${ai_total_variable:,.2f})"
+                )
 
         if ai_available:
             if not ai_total_income and not ai_var_rows and not ai_fixed_cost:
-                st.info(f"No financial data recorded for {MONTHS[sel_month]} {sel_year}. Add some income and expenses first.")
+                _notify("info", f"No financial data recorded for {MONTHS[sel_month]} {sel_year}. Add some income and expenses first.")
             else:
                 cache_key = f"ai_insights_{sel_year}_{sel_month}"
                 if st.button("✨ Generate AI Insights", type="primary"):
@@ -2348,80 +2421,76 @@ elif page == "🤖 AI Insights":
                         st.markdown(st.session_state[cache_key])
                     st.caption("*Generated by GPT-4o-mini. This is informational only, not financial advice.*")
         else:
-            st.info("Configure your OpenAI API key in the sidebar to generate AI insights.")
+            _notify("info", "Configure your OpenAI API key in the sidebar to generate AI insights.")
 
     # ----- TAB: ANOMALY DETECTION -------------------------------------------
     with tab_anomalies:
-        st.subheader("⚠️ Anomaly Detection")
-        st.caption(
-            "Runs entirely locally — no API calls. Flags variable expenses that are unusually high "
-            "compared to your typical spending in that category (2+ standard deviations above average)."
-        )
+        with _section_card(
+            "⚠️ Anomaly Detection",
+            "Runs entirely locally with no API calls. Flags category spend outliers using standard deviation.",
+        ):
 
-        # Use last 12 months for a meaningful sample
-        all_recent_var: list[dict] = []
-        for m_offset in range(12):
-            m = (sel_month - 1 - m_offset) % 12 + 1
-            y = sel_year if sel_month - m_offset > 0 else sel_year - 1
-            all_recent_var.extend(db.get_variable_expenses(year=y, month=m))
+            # Use last 12 months for a meaningful sample
+            all_recent_var: list[dict] = []
+            for m_offset in range(12):
+                m = (sel_month - 1 - m_offset) % 12 + 1
+                y = sel_year if sel_month - m_offset > 0 else sel_year - 1
+                all_recent_var.extend(db.get_variable_expenses(year=y, month=m))
 
-        threshold = st.slider(
-            "Sensitivity (standard deviations above average to flag)",
-            min_value=1.0, max_value=4.0, value=2.0, step=0.5,
-            help="Lower = more sensitive (more flags). Higher = only extreme outliers.",
-        )
-
-        anomalies = ai.detect_anomalies(all_recent_var, threshold_stdev=float(threshold))
-
-        if anomalies:
-            st.warning(f"Found **{len(anomalies)}** unusual transaction(s) in the last 12 months:")
-            for a in anomalies:
-                with st.container(border=True):
-                    c1, c2, c3 = st.columns([2, 1, 1])
-                    with c1:
-                        st.markdown(f"**{a['date']}** — {a['category']}")
-                        if a["description"]:
-                            st.caption(a["description"])
-                    with c2:
-                        st.metric("Amount", f"${a['amount']:,.2f}")
-                    with c3:
-                        st.metric("Avg for Category", f"${a['avg_for_category']:,.2f}")
-                    st.caption(f"This is **{a['z_score']:.1f}×** standard deviations above your average {a['category']} spend.")
-        else:
-            st.success(
-                "✅ No unusual transactions detected in the last 12 months at the current sensitivity level."
+            threshold = st.slider(
+                "Sensitivity (standard deviations above average to flag)",
+                min_value=1.0, max_value=4.0, value=2.0, step=0.5,
+                help="Lower = more sensitive (more flags). Higher = only extreme outliers.",
             )
+
+            anomalies = ai.detect_anomalies(all_recent_var, threshold_stdev=float(threshold))
+
+            if anomalies:
+                _notify("warning", f"Found **{len(anomalies)}** unusual transaction(s) in the last 12 months:")
+                for a in anomalies:
+                    with st.container(border=True):
+                        c1, c2, c3 = st.columns([2, 1, 1])
+                        with c1:
+                            st.markdown(f"**{a['date']}** — {a['category']}")
+                            if a["description"]:
+                                st.caption(a["description"])
+                        with c2:
+                            st.metric("Amount", f"${a['amount']:,.2f}")
+                        with c3:
+                            st.metric("Avg for Category", f"${a['avg_for_category']:,.2f}")
+                        st.caption(f"This is **{a['z_score']:.1f}×** standard deviations above your average {a['category']} spend.")
+            else:
+                _notify("success", "✅ No unusual transactions detected in the last 12 months at the current sensitivity level.")
 
     # ----- TAB: CHAT ADVISOR ------------------------------------------------
     with tab_chat:
-        st.subheader("💬 Chat with Your Financial Advisor")
-        st.caption(f"Ask anything about your finances for {MONTHS[sel_month]} {sel_year}.")
+        with _section_card("💬 Chat with Your Financial Advisor", f"Ask anything about your finances for {MONTHS[sel_month]} {sel_year}."):
 
-        if not ai_available:
-            st.info("Configure your OpenAI API key in the sidebar to use the Chat Advisor.")
-        else:
-            # Initialise conversation history in session state
-            if "ai_chat_history" not in st.session_state:
-                st.session_state["ai_chat_history"] = []
+            if not ai_available:
+                _notify("info", "Configure your OpenAI API key in the sidebar to use the Chat Advisor.")
+            else:
+                # Initialise conversation history in session state
+                if "ai_chat_history" not in st.session_state:
+                    st.session_state["ai_chat_history"] = []
 
-            chat_history: list[dict] = st.session_state["ai_chat_history"]
+                chat_history: list[dict] = st.session_state["ai_chat_history"]
 
-            # Display conversation
-            for turn in chat_history:
-                with st.chat_message(turn["role"]):
-                    st.markdown(turn["content"])
+                # Display conversation
+                for turn in chat_history:
+                    with st.chat_message(turn["role"]):
+                        st.markdown(turn["content"])
 
-            # Input
-            user_input = st.chat_input("Ask a question, e.g. 'Am I overspending on food?' or 'How can I save more?'")
-            if user_input:
-                chat_history.append({"role": "user", "content": user_input})
-                with st.chat_message("user"):
-                    st.markdown(user_input)
+                # Input
+                user_input = st.chat_input("Ask a question, e.g. 'Am I overspending on food?' or 'How can I save more?'")
+                if user_input:
+                    chat_history.append({"role": "user", "content": user_input})
+                    with st.chat_message("user"):
+                        st.markdown(user_input)
 
-                with st.chat_message("assistant"):
-                    with st.spinner("Thinking…"):
-                        reply = ai.chat_with_advisor(user_input, chat_history[:-1], financial_context)
-                    st.markdown(reply)
+                    with st.chat_message("assistant"):
+                        with st.spinner("Thinking…"):
+                            reply = ai.chat_with_advisor(user_input, chat_history[:-1], financial_context)
+                        st.markdown(reply)
 
                 chat_history.append({"role": "assistant", "content": reply})
                 st.session_state["ai_chat_history"] = chat_history
