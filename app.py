@@ -12,6 +12,7 @@ Pages
 """
 
 import calendar
+import html
 import hashlib
 import hmac
 import os
@@ -20,6 +21,7 @@ from datetime import date, datetime, timezone
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
+import plotly.io as pio
 import streamlit as st
 
 import database as db
@@ -34,6 +36,302 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded",
 )
+
+
+def _configure_visual_theme() -> None:
+    """Apply app-wide CSS tokens and a shared Plotly chart template."""
+    st.markdown(
+        """
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Fraunces:wght@500;700&family=Space+Grotesk:wght@400;500;600;700&display=swap');
+
+:root {
+    --bb-bg: #f6f4ef;
+    --bb-surface: #fcfbf8;
+    --bb-surface-strong: #ffffff;
+    --bb-ink: #1f2833;
+    --bb-muted: #5f6b7a;
+    --bb-accent: #0f766e;
+    --bb-accent-soft: #d4f2ef;
+    --bb-warn: #e07a5f;
+    --bb-good: #1f8f56;
+    --bb-border: #d7d3c7;
+    --bb-shadow: 0 10px 30px rgba(31, 40, 51, 0.08);
+}
+
+html, body, [class*="stApp"] {
+    font-family: 'Space Grotesk', sans-serif;
+    color: var(--bb-ink);
+}
+
+.stApp {
+    background:
+        radial-gradient(1000px 400px at 10% 5%, rgba(212, 242, 239, 0.65), transparent 65%),
+        radial-gradient(900px 350px at 95% 2%, rgba(244, 200, 180, 0.35), transparent 70%),
+        var(--bb-bg);
+}
+
+h1, h2, h3 {
+    font-family: 'Fraunces', serif;
+    letter-spacing: 0.2px;
+    color: var(--bb-ink);
+}
+
+[data-testid="stAppViewContainer"] > .main {
+    max-width: 1280px;
+}
+
+hr {
+    border: none;
+    height: 1px;
+    background: linear-gradient(90deg, transparent, rgba(95, 107, 122, 0.5), transparent);
+    margin: 1.2rem 0;
+}
+
+[data-testid="stSidebar"] {
+    background: linear-gradient(180deg, #f2efe7 0%, #ece8de 100%);
+    border-right: 1px solid var(--bb-border);
+}
+
+[data-testid="stSidebar"] [data-testid="stMarkdownContainer"] p,
+[data-testid="stSidebar"] label {
+    color: #28313d;
+}
+
+[data-testid="stMetric"] {
+    background: var(--bb-surface-strong);
+    border: 1px solid var(--bb-border);
+    border-radius: 14px;
+    box-shadow: var(--bb-shadow);
+    padding: 0.85rem 0.95rem;
+}
+
+[data-testid="stForm"],
+[data-testid="stExpander"],
+[data-testid="stDataFrame"],
+[data-testid="stVerticalBlock"] > [data-testid="stVerticalBlockBorderWrapper"] {
+    border-radius: 14px;
+}
+
+[data-testid="stVerticalBlock"] > [data-testid="stVerticalBlockBorderWrapper"] {
+    border: 1px solid var(--bb-border);
+    background: var(--bb-surface-strong);
+    box-shadow: var(--bb-shadow);
+}
+
+[data-testid="stExpander"] {
+    border: 1px solid var(--bb-border);
+    background: var(--bb-surface-strong);
+}
+
+[data-testid="stExpander"] summary {
+    font-weight: 600;
+    color: var(--bb-ink);
+}
+
+[data-baseweb="tab-list"] {
+    gap: 0.35rem;
+}
+
+[data-baseweb="tab"] {
+    border-radius: 10px 10px 0 0;
+    background: rgba(15, 118, 110, 0.08);
+    border: 1px solid rgba(15, 118, 110, 0.18);
+    font-weight: 600;
+}
+
+[data-baseweb="tab-highlight"] {
+    background-color: #0f766e;
+}
+
+[data-baseweb="input"] > div,
+[data-baseweb="select"] > div,
+[data-baseweb="textarea"] > div,
+[data-baseweb="base-input"] > div {
+    background: #fffdfa;
+    border-color: #c8c3b5;
+}
+
+[data-testid="stRadio"] label,
+[data-testid="stCheckbox"] label {
+    font-weight: 500;
+    color: var(--bb-ink);
+}
+
+[data-testid="stButton"] button,
+[data-testid="baseButton-secondary"] {
+    border-radius: 12px;
+    border: 1px solid #0f766e;
+    background: linear-gradient(160deg, #13867d 0%, #0f766e 100%);
+    color: #f4f8f7;
+    font-weight: 600;
+    transition: transform 0.16s ease, box-shadow 0.16s ease;
+}
+
+[data-testid="stButton"] button:hover,
+[data-testid="baseButton-secondary"]:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 6px 16px rgba(15, 118, 110, 0.25);
+}
+
+.bb-kpi-tile {
+    background: var(--bb-surface-strong);
+    border: 1px solid var(--bb-border);
+    border-radius: 14px;
+    box-shadow: var(--bb-shadow);
+    padding: 0.75rem 0.85rem;
+    animation: bb-fade-up 0.35s ease both;
+}
+
+.bb-page-head {
+    background: linear-gradient(120deg, rgba(15, 118, 110, 0.09), rgba(224, 122, 95, 0.08));
+    border: 1px solid var(--bb-border);
+    border-radius: 16px;
+    box-shadow: var(--bb-shadow);
+    padding: 1rem 1.15rem;
+    margin-bottom: 0.95rem;
+    animation: bb-fade-up 0.38s ease both;
+}
+
+.bb-page-title {
+    margin: 0;
+    line-height: 1.2;
+}
+
+.bb-page-subtitle {
+    margin-top: 0.35rem;
+    color: var(--bb-muted);
+    font-weight: 500;
+    font-size: 0.94rem;
+}
+
+.bb-inline-stat {
+    text-align: right;
+    color: var(--bb-ink);
+    font-weight: 700;
+    font-size: 0.95rem;
+}
+
+.bb-kpi-label {
+    color: var(--bb-muted);
+    font-size: 0.8rem;
+    margin-bottom: 0.2rem;
+}
+
+.bb-kpi-value {
+    color: var(--bb-ink);
+    font-size: 1.1rem;
+    font-weight: 700;
+}
+
+.bb-chip {
+    display: inline-block;
+    border-radius: 999px;
+    padding: 0.15rem 0.6rem;
+    font-size: 0.78rem;
+    font-weight: 600;
+    border: 1px solid transparent;
+}
+
+.bb-chip-good {
+    color: #14532d;
+    background: #d1fae5;
+    border-color: #86efac;
+}
+
+.bb-chip-bad {
+    color: #7f1d1d;
+    background: #fee2e2;
+    border-color: #fca5a5;
+}
+
+.bb-chip-accent {
+    color: #134e4a;
+    background: var(--bb-accent-soft);
+    border-color: #8ddad2;
+}
+
+@keyframes bb-fade-up {
+    from {
+        opacity: 0;
+        transform: translateY(8px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+@media (max-width: 900px) {
+    h1 {
+        font-size: 1.7rem;
+    }
+
+    [data-testid="stMetric"] {
+        padding: 0.7rem 0.75rem;
+    }
+}
+</style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    pio.templates["budgetingbot"] = go.layout.Template(
+        layout=go.Layout(
+            paper_bgcolor="rgba(0,0,0,0)",
+            plot_bgcolor="#fffdfa",
+            font={"family": "Space Grotesk, sans-serif", "color": "#1f2833", "size": 13},
+            colorway=["#0f766e", "#e07a5f", "#2f5d8c", "#d9a441", "#64748b", "#7f5539"],
+            title={"font": {"family": "Fraunces, serif", "size": 19, "color": "#1f2833"}},
+            xaxis={
+                "gridcolor": "rgba(95, 107, 122, 0.15)",
+                "linecolor": "rgba(95, 107, 122, 0.4)",
+                "zerolinecolor": "rgba(95, 107, 122, 0.22)",
+            },
+            yaxis={
+                "gridcolor": "rgba(95, 107, 122, 0.15)",
+                "linecolor": "rgba(95, 107, 122, 0.4)",
+                "zerolinecolor": "rgba(95, 107, 122, 0.22)",
+            },
+            legend={"bgcolor": "rgba(0,0,0,0)"},
+        )
+    )
+    pio.templates.default = "budgetingbot"
+
+
+def _status_chip(text: str, state: str = "accent") -> None:
+    class_map = {
+        "good": "bb-chip-good",
+        "bad": "bb-chip-bad",
+        "accent": "bb-chip-accent",
+    }
+    chip_class = class_map.get(state, "bb-chip-accent")
+    st.markdown(f"<span class='bb-chip {chip_class}'>{text}</span>", unsafe_allow_html=True)
+
+
+def _kpi_tile(label: str, value: str) -> None:
+    st.markdown(
+        f"<div class='bb-kpi-tile'><div class='bb-kpi-label'>{label}</div><div class='bb-kpi-value'>{value}</div></div>",
+        unsafe_allow_html=True,
+    )
+
+
+def _page_header(title: str, subtitle: str = "") -> None:
+    escaped_title = html.escape(title)
+    subtitle_html = (
+        f"<div class='bb-page-subtitle'>{html.escape(subtitle)}</div>" if subtitle else ""
+    )
+    st.markdown(
+        f"<div class='bb-page-head'><h1 class='bb-page-title'>{escaped_title}</h1>{subtitle_html}</div>",
+        unsafe_allow_html=True,
+    )
+
+
+def _inline_stat(value: str) -> None:
+    st.markdown(f"<div class='bb-inline-stat'>{html.escape(value)}</div>", unsafe_allow_html=True)
+
+
+_configure_visual_theme()
 
 
 # ---------------------------------------------------------------------------
@@ -170,8 +468,7 @@ def _render_login() -> None:
             )
         st.divider()
 
-    st.title("🔒 Login Required")
-    st.caption("Sign in to access your budgeting data.")
+    _page_header("🔒 Login Required", "Sign in to access your budgeting data.")
 
     username = _secret_or_env(AUTH_USER_ENV)
     password_salt = _secret_or_env(AUTH_SALT_ENV)
@@ -326,15 +623,9 @@ with st.sidebar:
     st.title("💸 Budgeting Bot")
     st.caption(f"Signed in as: {st.session_state['auth_user']}")
     if db_online:
-        st.markdown(
-            "<span style='color:#16a34a;'>Database: Online</span>",
-            unsafe_allow_html=True,
-        )
+        _status_chip("Database: Online", state="good")
     else:
-        st.markdown(
-            "<span style='color:#dc2626;'>Database: Offline</span>",
-            unsafe_allow_html=True,
-        )
+        _status_chip("Database: Offline", state="bad")
     if st.button("🚪 Log out", width="stretch"):
         _logout()
         st.rerun()
@@ -377,10 +668,7 @@ with st.sidebar:
     openai_key = _secret_or_env(OPENAI_KEY_ENV, "")
     if openai_key:
         os.environ[OPENAI_KEY_ENV] = openai_key
-        st.markdown(
-            "<span style='color:#16a34a;font-size:0.85rem;'>AI: Configured ✓</span>",
-            unsafe_allow_html=True,
-        )
+        _status_chip("AI: Configured", state="good")
     else:
         with st.expander("Configure OpenAI Key"):
             new_key = st.text_input("OpenAI API Key", type="password", key="sidebar_openai_key")
@@ -427,7 +715,7 @@ def _to_df(rows: list, columns: list = None) -> pd.DataFrame:
 # PAGE: DASHBOARD
 # ===========================================================================
 if page == "📊 Dashboard":
-    st.title(f"📊 Dashboard — {MONTHS[sel_month]} {sel_year}")
+    _page_header("📊 Dashboard", f"{MONTHS[sel_month]} {sel_year}")
 
     # --- gather data --------------------------------------------------------
     income_rows = db.get_income(year=sel_year, month=sel_month)
@@ -639,7 +927,7 @@ if page == "📊 Dashboard":
 # PAGE: INCOME
 # ===========================================================================
 elif page == "💰 Income":
-    st.title("💰 Income")
+    _page_header("💰 Income", "Track source-by-source earnings and edit entries quickly.")
 
     # Fetch all income for month and year across all sources
     month_rows = db.get_income(year=sel_year, month=sel_month)
@@ -659,17 +947,9 @@ elif page == "💰 Income":
     for i, src in enumerate(INCOME_SOURCES):
         with kpi_cols[i]:
             src_mo = sum(r['amount'] for r in month_by_src.get(src, []))
-            st.markdown(
-                f"<div style='font-size:0.85rem;color:gray;margin-bottom:2px'>{src} — {MONTHS[sel_month]}</div>"
-                f"<div style='font-size:1.1rem;font-weight:600'>${src_mo:,.2f}</div>",
-                unsafe_allow_html=True,
-            )
+            _kpi_tile(f"{src} — {MONTHS[sel_month]}", f"${src_mo:,.2f}")
     with kpi_cols[-1]:
-        st.markdown(
-            f"<div style='font-size:0.85rem;color:gray;margin-bottom:2px'>Total This Month</div>"
-            f"<div style='font-size:1.1rem;font-weight:600'>${total_month:,.2f}</div>",
-            unsafe_allow_html=True,
-        )
+        _kpi_tile("Total This Month", f"${total_month:,.2f}")
 
     st.markdown("---")
 
@@ -686,17 +966,9 @@ elif page == "💰 Income":
                 st.subheader(source)
                 m1, m2 = st.columns(2)
                 with m1:
-                    st.markdown(
-                        f"<div style='font-size:0.72rem;color:gray;margin-bottom:2px'>{MONTHS[sel_month]}</div>"
-                        f"<div style='font-size:0.95rem;font-weight:600'>${month_total:,.2f}</div>",
-                        unsafe_allow_html=True,
-                    )
+                    _kpi_tile(MONTHS[sel_month], f"${month_total:,.2f}")
                 with m2:
-                    st.markdown(
-                        f"<div style='font-size:0.72rem;color:gray;margin-bottom:2px'>{sel_year} Total</div>"
-                        f"<div style='font-size:0.95rem;font-weight:600'>${year_total:,.2f}</div>",
-                        unsafe_allow_html=True,
-                    )
+                    _kpi_tile(f"{sel_year} Total", f"${year_total:,.2f}")
 
                 st.markdown("**Add Income**")
                 with st.form(f"income_form_{col_idx}", clear_on_submit=True):
@@ -781,7 +1053,7 @@ elif page == "💰 Income":
 # PAGE: FIXED EXPENSES
 # ===========================================================================
 elif page == "📌 Fixed Expenses":
-    st.title("📌 Fixed Expenses")
+    _page_header("📌 Fixed Expenses", "Recurring costs by category with monthly equivalents.")
     st.caption(
         "Fixed expenses recur automatically each month (or year). "
         "They are included in budget calculations as long as they are active."
@@ -825,10 +1097,7 @@ elif page == "📌 Fixed Expenses":
                 with title_col:
                     st.markdown(f"### {category}")
                 with total_col:
-                    st.markdown(
-                        f"<div style='text-align: right; font-weight: 600;'>${category_total:,.2f}/mo</div>",
-                        unsafe_allow_html=True,
-                    )
+                    _inline_stat(f"${category_total:,.2f}/mo")
                 st.caption(f"{len(category_rows)} expense(s) in this category")
 
                 with st.form(f"fixed_form_{idx}", clear_on_submit=True):
@@ -1022,7 +1291,7 @@ elif page == "📌 Fixed Expenses":
 # PAGE: VARIABLE EXPENSES
 # ===========================================================================
 elif page == "🛒 Variable Expenses":
-    st.title("🛒 Variable Expenses")
+    _page_header("🛒 Variable Expenses", "Log ad-hoc spending with trend and category insights.")
 
     rows = db.get_variable_expenses(year=sel_year, month=sel_month)
     all_var_rows = db.get_variable_expenses()
@@ -1251,7 +1520,7 @@ elif page == "🛒 Variable Expenses":
 # PAGE: SAVINGS
 # ===========================================================================
 elif page == "💵 Savings":
-    st.title("💵 Savings")
+    _page_header("💵 Savings", "Monitor balances and activity across savings accounts.")
 
     SAVINGS_ACCOUNTS = db.SAVINGS_ACCOUNTS
 
@@ -1421,7 +1690,7 @@ elif page == "💵 Savings":
 # PAGE: DEBT
 # ===========================================================================
 elif page == "💳 Debt":
-    st.title("💳 Debt")
+    _page_header("💳 Debt", "Track payoff progress, linked expenses, and payment cadence.")
 
     debts = db.get_debts()
     total_debt = sum(d["current_balance"] for d in debts)
@@ -1619,7 +1888,7 @@ elif page == "💳 Debt":
 # PAGE: FINANCIAL GOALS
 # ===========================================================================
 elif page == "🎯 Financial Goals":
-    st.title("🎯 Financial Goals")
+    _page_header("🎯 Financial Goals", "Set targets and monitor progress toward each milestone.")
 
     with st.expander("➕ Add New Goal", expanded=True):
         with st.form("goal_form", clear_on_submit=True):
@@ -1694,7 +1963,7 @@ elif page == "🎯 Financial Goals":
 # PAGE: REPORTS
 # ===========================================================================
 elif page == "📈 Reports":
-    st.title("📈 Reports")
+    _page_header("📈 Reports", "Monthly and yearly rollups across income, spend, savings, and debt.")
 
     report_type = st.radio("Report Type", ["Monthly Summary", "Yearly Summary"], horizontal=True)
 
@@ -1971,8 +2240,10 @@ elif page == "📈 Reports":
 # PAGE: AI INSIGHTS
 # ===========================================================================
 elif page == "🤖 AI Insights":
-    st.title("🤖 AI Insights")
-    st.caption("Powered by OpenAI GPT-4o-mini — only aggregated summary data is sent, never raw transaction descriptions.")
+    _page_header(
+        "🤖 AI Insights",
+        "Powered by OpenAI GPT-4o-mini. Only aggregated summary data is sent, never raw transaction descriptions.",
+    )
 
     ai_available = ai.is_ai_available()
 
