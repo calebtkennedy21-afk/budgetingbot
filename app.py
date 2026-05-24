@@ -1030,6 +1030,15 @@ def _parse_statement_amount(value) -> float | None:
     text = str(value).strip()
     if not text:
         return None
+
+    text_upper = text.upper()
+    force_negative = False
+    if text_upper.endswith(" DR") or text_upper.endswith("DR"):
+        force_negative = True
+        text = re.sub(r"\s*DR$", "", text, flags=re.IGNORECASE).strip()
+    elif text_upper.endswith(" CR") or text_upper.endswith("CR"):
+        text = re.sub(r"\s*CR$", "", text, flags=re.IGNORECASE).strip()
+
     is_negative = False
     if text.startswith("(") and text.endswith(")"):
         is_negative = True
@@ -1039,7 +1048,7 @@ def _parse_statement_amount(value) -> float | None:
         amount = float(text)
     except ValueError:
         return None
-    if is_negative and amount > 0:
+    if (is_negative or force_negative) and amount > 0:
         amount = -amount
     if amount == 0:
         return None
@@ -1109,7 +1118,97 @@ def _statement_file_to_dataframe(uploaded_file) -> tuple[pd.DataFrame, str, str]
 
         return pd.DataFrame(normalized_rows), file_ext, ""
 
-    return pd.DataFrame(), file_ext or "unknown", "Unsupported file format. Use CSV, OFX, or QFX."
+    if file_ext == "pdf":
+        try:
+            from io import BytesIO
+            import pdfplumber  # type: ignore[import-not-found]
+        except Exception:
+            return (
+                pd.DataFrame(),
+                file_ext,
+                "PDF parser is unavailable. Install dependency: pdfplumber.",
+            )
+
+        def _extract_from_lines(lines: list[str]) -> list[dict]:
+            out: list[dict] = []
+            seen: set[tuple[str, float, str]] = set()
+            date_pattern = re.compile(r"(\d{4}-\d{2}-\d{2}|\d{1,2}[/-]\d{1,2}(?:[/-]\d{2,4})?)")
+            amt_pattern = re.compile(r"[-(]?\$?\d[\d,]*\.\d{2}\)?(?:\s*(?:DR|CR))?", re.IGNORECASE)
+
+            for raw_line in lines:
+                line = " ".join(str(raw_line or "").split())
+                if not line:
+                    continue
+                if "balance" in line.lower() and "payment" not in line.lower():
+                    continue
+
+                date_match = date_pattern.search(line)
+                if not date_match:
+                    continue
+                parsed_date = _parse_statement_date(date_match.group(1))
+                if not parsed_date:
+                    continue
+
+                amount_matches = amt_pattern.findall(line)
+                if not amount_matches:
+                    continue
+                parsed_amount = _parse_statement_amount(amount_matches[-1])
+                if parsed_amount is None:
+                    continue
+
+                desc = line
+                desc = desc.replace(date_match.group(1), " ", 1)
+                desc = desc.replace(amount_matches[-1], " ", 1)
+                desc = " ".join(desc.split()).strip("-: ")
+                if not desc:
+                    desc = "PDF statement transaction"
+
+                key = (parsed_date, float(parsed_amount), _normalize_text(desc))
+                if key in seen:
+                    continue
+                seen.add(key)
+
+                out.append(
+                    {
+                        "date": parsed_date,
+                        "amount": float(parsed_amount),
+                        "description": desc,
+                        "category": "Other",
+                    }
+                )
+            return out
+
+        try:
+            uploaded_file.seek(0)
+            raw_bytes = uploaded_file.read()
+            all_lines: list[str] = []
+            with pdfplumber.open(BytesIO(raw_bytes)) as pdf:
+                for page in pdf.pages:
+                    for table in page.extract_tables() or []:
+                        for row in table:
+                            if not row:
+                                continue
+                            row_line = " ".join(str(cell or "").strip() for cell in row if str(cell or "").strip())
+                            if row_line:
+                                all_lines.append(row_line)
+
+                    page_text = page.extract_text() or ""
+                    for tline in page_text.splitlines():
+                        if tline.strip():
+                            all_lines.append(tline.strip())
+
+            rows = _extract_from_lines(all_lines)
+            if not rows:
+                return (
+                    pd.DataFrame(),
+                    file_ext,
+                    "Could not detect transactions in PDF. Try CSV/OFX/QFX export for best results.",
+                )
+            return pd.DataFrame(rows), file_ext, ""
+        except Exception as exc:
+            return pd.DataFrame(), file_ext, f"Could not parse PDF file: {exc}"
+
+    return pd.DataFrame(), file_ext or "unknown", "Unsupported file format. Use CSV, OFX, QFX, or PDF."
 
 
 def _match_debt_target(description: str, debt_rows: list[dict]) -> dict | None:
@@ -1496,13 +1595,13 @@ if page == "🧭 Planning":
                     _notify("success", "Rule deleted.")
                     st.rerun()
 
-        with _section_card("Statement Import Pipeline", "Import CSV/OFX/QFX statements into income, expenses, savings transfers, and debt payments with dedupe."):
-            up_file = st.file_uploader("Upload Statement", type=["csv", "ofx", "qfx"], key="import_csv")
+        with _section_card("Statement Import Pipeline", "Import CSV/OFX/QFX/PDF statements into income, expenses, savings transfers, and debt payments with dedupe."):
+            up_file = st.file_uploader("Upload Statement", type=["csv", "ofx", "qfx", "pdf"], key="import_csv")
             if up_file is not None:
                 df_raw, file_type, parse_error = _statement_file_to_dataframe(up_file)
                 if parse_error:
                     _notify("error", parse_error)
-                elif file_type in {"ofx", "qfx"}:
+                elif file_type in {"ofx", "qfx", "pdf"}:
                     st.caption(f"Detected {file_type.upper()} format. Column mapping was auto-applied.")
 
                 if not df_raw.empty:
