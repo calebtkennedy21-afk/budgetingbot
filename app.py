@@ -1314,6 +1314,80 @@ def _route_statement_row(
     }
 
 
+def _merge_ai_statement_route(
+    base_row: dict,
+    ai_row: dict | None,
+    fallback_route: dict,
+) -> dict:
+    merged = dict(fallback_route)
+    if not ai_row:
+        merged["ai_route_used"] = False
+        return merged
+
+    route = str(ai_row.get("route", "unknown") or "unknown")
+    merged["ai_route_used"] = route != "unknown"
+    merged["ai_confidence"] = float(ai_row.get("confidence", 0.5) or 0.5)
+
+    if route == "fixed_expense":
+        merged.update(
+            {
+                "route": "fixed_expense",
+                "category": ai_row.get("category", merged.get("category", "Other")),
+                "is_recurring": True if ai_row.get("is_recurring", True) else False,
+                "frequency": ai_row.get("frequency", "monthly") or "monthly",
+                "fixed_name": ai_row.get("fixed_name") or base_row.get("description") or "Fixed expense",
+                "target": ai_row.get("fixed_name") or base_row.get("description") or "Fixed expense",
+            }
+        )
+        return merged
+
+    if route == "income":
+        merged.update(
+            {
+                "route": "income",
+                "category": ai_row.get("category", merged.get("category", "Other")),
+                "source": ai_row.get("source", merged.get("source", "Shared Checking")),
+                "target": f"{ai_row.get('source', merged.get('source', 'Shared Checking'))}:{ai_row.get('category', merged.get('category', 'Other'))}",
+            }
+        )
+        return merged
+
+    if route == "variable_expense":
+        merged.update(
+            {
+                "route": "variable_expense",
+                "category": ai_row.get("category", merged.get("category", "Other")),
+                "is_recurring": bool(ai_row.get("is_recurring", merged.get("is_recurring", False))),
+                "target": ai_row.get("category", merged.get("category", "Other")),
+            }
+        )
+        return merged
+
+    if route == "savings_transfer":
+        merged.update(
+            {
+                "route": "savings_transfer",
+                "savings_account": ai_row.get("savings_account", merged.get("savings_account", "Joint Savings")),
+                "savings_type": ai_row.get("savings_type", merged.get("savings_type", "deposit")),
+                "target": ai_row.get("savings_account", merged.get("savings_account", "Joint Savings")),
+            }
+        )
+        return merged
+
+    if route == "debt_payment":
+        merged.update(
+            {
+                "route": "debt_payment",
+                "debt_name": ai_row.get("debt_name", merged.get("debt_name", "")),
+                "target": ai_row.get("debt_name", merged.get("debt_name", "")),
+            }
+        )
+        return merged
+
+    merged["ai_route_used"] = False
+    return merged
+
+
 def _statement_owner_defaults(statement_owner: str) -> tuple[str, str]:
     owner = (statement_owner or "Joint").strip().lower()
     if owner == "caleb":
@@ -1323,14 +1397,26 @@ def _statement_owner_defaults(statement_owner: str) -> tuple[str, str]:
     return "Shared Checking", "Joint Savings"
 
 
-def _import_fingerprint(route_payload: dict) -> str:
+def _statement_route_fingerprint(route_payload: dict) -> str:
     route = str(route_payload.get("route", ""))
     txn_date = str(route_payload.get("txn_date", ""))
     amount = float(route_payload.get("amount", 0.0))
     desc = _normalize_text(str(route_payload.get("description", "")))
     target = str(route_payload.get("target", ""))
-    raw = f"{route}|{txn_date}|{amount:.2f}|{desc}|{target}"
+    category = str(route_payload.get("category", ""))
+    frequency = str(route_payload.get("frequency", ""))
+
+    if route == "fixed_expense":
+        raw = f"{route}|{target}|{amount:.2f}|{category}|{frequency}"
+    elif route == "debt_payment":
+        raw = f"{route}|{txn_date}|{amount:.2f}|{desc}|{target}"
+    else:
+        raw = f"{route}|{txn_date}|{amount:.2f}|{desc}|{target}"
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def _import_fingerprint(route_payload: dict) -> str:
+    return _statement_route_fingerprint(route_payload)
 
 
 # ==========================================================================
@@ -1657,8 +1743,18 @@ if page == "🧭 Planning":
                             f"Default routing for this PDF: income source = {owner_income_source}, savings account = {owner_savings_account}."
                         )
 
+                        pdf_ai_enabled = st.checkbox(
+                            "Use AI-assisted PDF parsing",
+                            value=ai.is_ai_available(),
+                            help="AI helps classify each PDF row as fixed expense, variable expense, income, savings transfer, or debt payment.",
+                            key="pdf_ai_enabled",
+                        )
+                    else:
+                        pdf_ai_enabled = False
+
                     debt_rows = db.get_debts()
-                    routed_rows: list[dict] = []
+                    debt_names = [str(d.get("name", "")) for d in debt_rows if str(d.get("name", ""))]
+                    staged_rows: list[dict] = []
                     invalid_rows = 0
                     for _, row in df_raw.iterrows():
                         parsed_date = _parse_statement_date(row.get(col_date))
@@ -1671,16 +1767,50 @@ if page == "🧭 Planning":
                         mapped_category, mapped_recurring = _apply_import_rules(
                             raw_desc, raw_category, rules
                         )
-                        payload = _route_statement_row(
-                            txn_date=parsed_date,
-                            signed_amount=float(parsed_amount),
-                            description=raw_desc,
-                            mapped_category=mapped_category,
-                            mapped_recurring=mapped_recurring,
+                        staged_rows.append(
+                            {
+                                "row_id": len(staged_rows),
+                                "txn_date": parsed_date,
+                                "amount": float(parsed_amount),
+                                "description": raw_desc,
+                                "raw_category": raw_category,
+                                "mapped_category": mapped_category,
+                                "mapped_recurring": mapped_recurring,
+                            }
+                        )
+
+                    ai_classifications: dict[int, dict] = {}
+                    if file_type == "pdf" and pdf_ai_enabled and ai.is_ai_available() and staged_rows:
+                        ai_rows = ai.classify_statement_rows(
+                            staged_rows,
+                            pdf_owner,
+                            import_income_source,
+                            import_savings_account,
+                            debt_names,
+                        )
+                        ai_classifications = {
+                            int(item.get("row_id", idx)): item
+                            for idx, item in enumerate(ai_rows)
+                            if isinstance(item, dict)
+                        }
+                        if not ai_classifications:
+                            _notify("warning", "AI PDF classification could not be parsed. Falling back to heuristic routing.")
+
+                    routed_rows: list[dict] = []
+                    for base_row in staged_rows:
+                        fallback = _route_statement_row(
+                            txn_date=base_row["txn_date"],
+                            signed_amount=float(base_row["amount"]),
+                            description=base_row["description"],
+                            mapped_category=str(base_row["mapped_category"]),
+                            mapped_recurring=bool(base_row["mapped_recurring"]),
                             debt_rows=debt_rows,
                             savings_account=import_savings_account,
                             default_income_source=import_income_source,
                         )
+
+                        ai_row = ai_classifications.get(int(base_row["row_id"])) if ai_classifications else None
+                        payload = _merge_ai_statement_route(base_row, ai_row, fallback)
                         payload["fingerprint"] = _import_fingerprint(payload)
                         routed_rows.append(payload)
 
@@ -1716,7 +1846,11 @@ if page == "🧭 Planning":
                                     "savings_account": rr.get("savings_account", import_savings_account),
                                     "savings_type": rr.get("savings_type", "deposit"),
                                     "is_recurring": bool(rr.get("is_recurring", False)),
+                                    "frequency": rr.get("frequency", "monthly"),
+                                    "fixed_name": rr.get("fixed_name", ""),
                                     "debt_name": debt_id_to_name.get(int(rr.get("debt_id", 0)), "") if rr.get("debt_id") else "",
+                                    "ai_confidence": float(rr.get("ai_confidence", 0.0) or 0.0),
+                                    "ai_route_used": bool(rr.get("ai_route_used", False)),
                                 }
                             )
 
@@ -1733,18 +1867,22 @@ if page == "🧭 Planning":
                                 "description": st.column_config.TextColumn("Description", disabled=True, width="large"),
                                 "route": st.column_config.SelectboxColumn(
                                     "Route",
-                                    options=["income", "variable_expense", "savings_transfer", "debt_payment"],
+                                    options=["income", "variable_expense", "fixed_expense", "savings_transfer", "debt_payment"],
                                     required=True,
                                 ),
                                 "category": st.column_config.SelectboxColumn(
                                     "Category",
-                                    options=sorted(set(VARIABLE_EXPENSE_CATEGORIES + INCOME_CATEGORIES + ["Other"])),
+                                    options=sorted(set(VARIABLE_EXPENSE_CATEGORIES + INCOME_CATEGORIES + FIXED_EXPENSE_CATEGORIES + ["Other"])),
                                 ),
                                 "source": st.column_config.SelectboxColumn("Income Source", options=INCOME_SOURCES),
                                 "savings_account": st.column_config.SelectboxColumn("Savings Account", options=db.SAVINGS_ACCOUNTS),
                                 "savings_type": st.column_config.SelectboxColumn("Savings Type", options=["deposit", "withdrawal"]),
                                 "is_recurring": st.column_config.CheckboxColumn("Recurring"),
+                                "frequency": st.column_config.SelectboxColumn("Frequency", options=["monthly", "yearly", "one_time"]),
+                                "fixed_name": st.column_config.TextColumn("Fixed Name"),
                                 "debt_name": st.column_config.SelectboxColumn("Debt", options=debt_name_options),
+                                "ai_confidence": st.column_config.NumberColumn("AI Confidence", disabled=True, format="%.2f"),
+                                "ai_route_used": st.column_config.CheckboxColumn("AI Used", disabled=True),
                             },
                         )
                         st.caption("Import uses the edited rows shown above.")
@@ -1777,6 +1915,13 @@ if page == "🧭 Planning":
                                     rr["category"] = cat if cat in VARIABLE_EXPENSE_CATEGORIES else "Other"
                                     rr["is_recurring"] = bool(er.get("is_recurring", False))
                                     rr["target"] = rr["category"]
+                                elif route == "fixed_expense":
+                                    fixed_name = str(er.get("fixed_name", "") or description or "Fixed expense")
+                                    rr["fixed_name"] = fixed_name
+                                    rr["category"] = str(er.get("category", "Other"))
+                                    rr["frequency"] = str(er.get("frequency", "monthly") or "monthly")
+                                    rr["is_recurring"] = True
+                                    rr["target"] = fixed_name
                                 elif route == "savings_transfer":
                                     rr["savings_account"] = str(er.get("savings_account", import_savings_account))
                                     rr["savings_type"] = str(er.get("savings_type", "deposit"))
@@ -1811,6 +1956,19 @@ if page == "🧭 Planning":
                                             rr.get("category", "Other"),
                                             rr.get("description", ""),
                                             bool(rr.get("is_recurring", False)),
+                                        )
+                                    elif rr["route"] == "fixed_expense":
+                                        fixed_name = rr.get("fixed_name") or rr.get("description") or "Imported fixed expense"
+                                        fixed_category = rr.get("category", "Other")
+                                        fixed_frequency = rr.get("frequency", "monthly")
+                                        db.add_fixed_expense(
+                                            str(fixed_name),
+                                            float(rr["amount"]),
+                                            str(fixed_category),
+                                            str(fixed_frequency if fixed_frequency in {"monthly", "yearly"} else "monthly"),
+                                            rr["txn_date"],
+                                            None,
+                                            rr.get("description", "Statement import fixed expense"),
                                         )
                                     elif rr["route"] == "savings_transfer":
                                         db.add_savings_transaction(

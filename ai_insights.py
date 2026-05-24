@@ -13,8 +13,10 @@ Only aggregated/summarised data is sent to OpenAI — no raw transaction descrip
 
 from __future__ import annotations
 
+import json
 import os
 import statistics
+import re
 from datetime import date
 from typing import Optional
 
@@ -364,6 +366,121 @@ Do not make up specific numbers not provided above. Keep answers under 150 words
         return response.choices[0].message.content.strip()
     except Exception as exc:
         return f"⚠️ Could not get a response: {exc}"
+
+
+def classify_statement_rows(
+    statement_rows: list[dict],
+    statement_owner: str,
+    default_income_source: str,
+    default_savings_account: str,
+    debt_names: list[str],
+) -> list[dict]:
+    """
+    Classify statement rows into import routes using AI.
+
+    Returns a list aligned with statement_rows. Each item can include:
+      route, category, is_recurring, frequency, source, savings_account,
+      savings_type, debt_name, fixed_name, confidence
+    """
+    client = _get_client()
+    if not client or not statement_rows:
+        return []
+
+    payload_rows = []
+    for idx, row in enumerate(statement_rows):
+        payload_rows.append(
+            {
+                "row_id": idx,
+                "date": row.get("date", ""),
+                "amount": row.get("amount", ""),
+                "description": row.get("description", ""),
+                "category_hint": row.get("category", "Other"),
+            }
+        )
+
+    prompt = f"""Classify household banking statement rows into import destinations.
+
+Statement owner: {statement_owner}
+Default income source: {default_income_source}
+Default savings account: {default_savings_account}
+Known debt names: {', '.join(debt_names) if debt_names else 'None'}
+
+Use one of these routes exactly:
+- income
+- variable_expense
+- fixed_expense
+- savings_transfer
+- debt_payment
+- unknown
+
+Guidance:
+- fixed_expense = recurring bills/subscriptions/rent/insurance/utilities/loan bills that should create or update a fixed expense record.
+- variable_expense = discretionary or one-off spending.
+- income = wages, refunds, interest, dividends, reimbursements.
+- savings_transfer = transfers between household accounts or savings moves.
+- debt_payment = credit card or loan payments that reduce debt balances.
+
+Return ONLY valid JSON as an array with one object per row, in the same order as the input rows.
+Each object must contain:
+row_id, route, category, is_recurring, frequency, source, savings_account, savings_type, debt_name, fixed_name, confidence
+
+Rules:
+- category should be a sensible app category or "Other".
+- is_recurring should be true for recurring fixed charges or recurring habits.
+- frequency should be "monthly", "yearly", or "one_time".
+- source should usually be the default income source when route is income.
+- savings_account should usually be the default savings account when route is savings_transfer.
+- debt_name should be one of the known debt names when route is debt_payment.
+- fixed_name should be a short label for the fixed expense when route is fixed_expense.
+- confidence should be a number from 0 to 1.
+
+Rows:
+{json.dumps(payload_rows, ensure_ascii=False)}
+"""
+
+    try:
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {"role": "system", "content": "You classify statement rows into finance import routes and return strict JSON only."},
+                {"role": "user", "content": prompt},
+            ],
+            max_tokens=1200,
+            temperature=0,
+        )
+        content = response.choices[0].message.content.strip()
+        content = re.sub(r"^```json\s*", "", content, flags=re.IGNORECASE)
+        content = re.sub(r"^```\s*", "", content)
+        content = re.sub(r"\s*```$", "", content)
+        parsed = json.loads(content)
+        if isinstance(parsed, dict) and "rows" in parsed:
+            parsed = parsed["rows"]
+        if not isinstance(parsed, list):
+            return []
+
+        normalized: list[dict] = []
+        for idx, item in enumerate(parsed[: len(statement_rows)]):
+            if not isinstance(item, dict):
+                normalized.append({"row_id": idx, "route": "unknown"})
+                continue
+            normalized.append(
+                {
+                    "row_id": int(item.get("row_id", idx)),
+                    "route": str(item.get("route", "unknown")),
+                    "category": str(item.get("category", "Other") or "Other"),
+                    "is_recurring": bool(item.get("is_recurring", False)),
+                    "frequency": str(item.get("frequency", "one_time") or "one_time"),
+                    "source": str(item.get("source", default_income_source) or default_income_source),
+                    "savings_account": str(item.get("savings_account", default_savings_account) or default_savings_account),
+                    "savings_type": str(item.get("savings_type", "deposit") or "deposit"),
+                    "debt_name": str(item.get("debt_name", "") or ""),
+                    "fixed_name": str(item.get("fixed_name", "") or ""),
+                    "confidence": float(item.get("confidence", 0.5) or 0.5),
+                }
+            )
+        return normalized
+    except Exception:
+        return []
 
 
 def generate_weekly_brief(financial_context: dict, recent_events: list[dict] | None = None) -> str:
