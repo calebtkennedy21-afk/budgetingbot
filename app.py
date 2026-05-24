@@ -1701,7 +1701,7 @@ if page == "🧭 Planning":
 
                 if not df_raw.empty:
                     cols = list(df_raw.columns)
-                    c1, c2, c3, c4, c5, c6 = st.columns(6)
+                    c1, c2, c3, c4, c5, c6, c7 = st.columns(7)
                     if file_type == "csv":
                         with c1:
                             col_date = st.selectbox("Date Column", cols, index=cols.index("date") if "date" in cols else 0)
@@ -1711,11 +1711,14 @@ if page == "🧭 Planning":
                             col_desc = st.selectbox("Description Column", cols, index=cols.index("description") if "description" in cols else min(2, len(cols)-1))
                         with c4:
                             col_cat = st.selectbox("Category Column", ["(none)"] + cols)
+                        with c7:
+                            col_balance = st.selectbox("Balance Column", ["(none)"] + cols)
                     else:
                         col_date = "date"
                         col_amount = "amount"
                         col_desc = "description"
                         col_cat = "category" if "category" in cols else "(none)"
+                        col_balance = "balance" if "balance" in cols else "(none)"
                         with c1:
                             st.text_input("Date Column", value=col_date, disabled=True)
                         with c2:
@@ -1724,6 +1727,8 @@ if page == "🧭 Planning":
                             st.text_input("Description Column", value=col_desc, disabled=True)
                         with c4:
                             st.text_input("Category Column", value=col_cat, disabled=True)
+                        with c7:
+                            st.text_input("Balance Column", value=col_balance, disabled=True)
                     with c5:
                         import_savings_account = st.selectbox("Savings Account", db.SAVINGS_ACCOUNTS, index=min(2, len(db.SAVINGS_ACCOUNTS) - 1))
                     with c6:
@@ -1762,6 +1767,11 @@ if page == "🧭 Planning":
                         if not parsed_date or parsed_amount is None:
                             invalid_rows += 1
                             continue
+                        parsed_balance = (
+                            _parse_statement_amount(row.get(col_balance))
+                            if col_balance != "(none)"
+                            else None
+                        )
                         raw_desc = str(row.get(col_desc, "") or "")
                         raw_category = "Other" if col_cat == "(none)" else str(row.get(col_cat, "Other") or "Other")
                         mapped_category, mapped_recurring = _apply_import_rules(
@@ -1772,6 +1782,7 @@ if page == "🧭 Planning":
                                 "row_id": len(staged_rows),
                                 "txn_date": parsed_date,
                                 "amount": float(parsed_amount),
+                                "balance": float(parsed_balance) if parsed_balance is not None else None,
                                 "description": raw_desc,
                                 "raw_category": raw_category,
                                 "mapped_category": mapped_category,
@@ -1811,6 +1822,7 @@ if page == "🧭 Planning":
 
                         ai_row = ai_classifications.get(int(base_row["row_id"])) if ai_classifications else None
                         payload = _merge_ai_statement_route(base_row, ai_row, fallback)
+                        payload["balance"] = base_row.get("balance")
                         payload["fingerprint"] = _import_fingerprint(payload)
                         routed_rows.append(payload)
 
@@ -1841,6 +1853,7 @@ if page == "🧭 Planning":
                                     "row_id": idx,
                                     "txn_date": rr.get("txn_date", ""),
                                     "amount": float(rr.get("amount", 0.0)),
+                                    "balance": rr.get("balance", None),
                                     "description": rr.get("description", ""),
                                     "route": rr.get("route", "variable_expense"),
                                     "category": rr.get("category", "Other"),
@@ -1875,6 +1888,7 @@ if page == "🧭 Planning":
                                         "row_id": idx,
                                         "txn_date": rr.get("txn_date", ""),
                                         "amount": float(rr.get("amount", 0.0)),
+                                        "balance": rr.get("balance", None),
                                         "description": rr.get("description", ""),
                                         "route": rr.get("route", "variable_expense"),
                                         "category": rr.get("category", "Other"),
@@ -1900,58 +1914,63 @@ if page == "🧭 Planning":
                                         continue
 
                                     if route_name == "income":
-                                        section_df = pd.DataFrame(section_rows)[["row_id", "txn_date", "description", "amount", "category", "source"]].copy()
-                                        section_df = section_df.rename(columns={"row_id": "Row", "txn_date": "Date", "description": "Description", "amount": "Amount", "category": "Category", "source": "Income Source"})
+                                        section_df = pd.DataFrame(section_rows)[["row_id", "txn_date", "description", "amount", "balance", "category", "source"]].copy()
+                                        section_df = section_df.rename(columns={"txn_date": "Date", "description": "Description", "amount": "Amount", "balance": "Balance", "category": "Category", "source": "Income Source"})
+                                        section_df = section_df.drop(columns=["row_id"])
                                         config = {
-                                            "Row": st.column_config.NumberColumn("Row", disabled=True),
                                             "Date": st.column_config.TextColumn("Date", disabled=True),
                                             "Description": st.column_config.TextColumn("Description", disabled=True, width="large"),
                                             "Amount": st.column_config.NumberColumn("Amount", disabled=True, format="%.2f"),
+                                            "Balance": st.column_config.NumberColumn("Balance", disabled=True, format="%.2f"),
                                             "Category": st.column_config.SelectboxColumn("Category", options=INCOME_CATEGORIES),
                                             "Income Source": st.column_config.SelectboxColumn("Income Source", options=INCOME_SOURCES),
                                         }
                                     elif route_name == "fixed_expense":
-                                        section_df = pd.DataFrame(section_rows)[["row_id", "txn_date", "description", "amount", "category", "fixed_name", "frequency", "is_recurring"]].copy()
-                                        section_df = section_df.rename(columns={"row_id": "Row", "txn_date": "Date", "description": "Description", "amount": "Amount", "category": "Category", "fixed_name": "Fixed Expense Name", "frequency": "Frequency", "is_recurring": "Recurring?"})
+                                        section_df = pd.DataFrame(section_rows)[["row_id", "txn_date", "description", "amount", "balance", "category", "fixed_name", "frequency", "is_recurring"]].copy()
+                                        section_df = section_df.rename(columns={"txn_date": "Date", "description": "Description", "amount": "Amount", "balance": "Balance", "category": "Category", "fixed_name": "Fixed Expense Name", "frequency": "Frequency", "is_recurring": "Recurring?"})
+                                        section_df = section_df.drop(columns=["row_id"])
                                         config = {
-                                            "Row": st.column_config.NumberColumn("Row", disabled=True),
                                             "Date": st.column_config.TextColumn("Date", disabled=True),
                                             "Description": st.column_config.TextColumn("Description", disabled=True, width="large"),
                                             "Amount": st.column_config.NumberColumn("Amount", disabled=True, format="%.2f"),
+                                            "Balance": st.column_config.NumberColumn("Balance", disabled=True, format="%.2f"),
                                             "Category": st.column_config.SelectboxColumn("Category", options=FIXED_EXPENSE_CATEGORIES),
                                             "Fixed Expense Name": st.column_config.TextColumn("Fixed Expense Name"),
                                             "Frequency": st.column_config.SelectboxColumn("Frequency", options=["monthly", "yearly", "one_time"]),
                                             "Recurring?": st.column_config.CheckboxColumn("Recurring?"),
                                         }
                                     elif route_name == "savings_transfer":
-                                        section_df = pd.DataFrame(section_rows)[["row_id", "txn_date", "description", "amount", "savings_account", "savings_type"]].copy()
-                                        section_df = section_df.rename(columns={"row_id": "Row", "txn_date": "Date", "description": "Description", "amount": "Amount", "savings_account": "Savings Account", "savings_type": "Savings Type"})
+                                        section_df = pd.DataFrame(section_rows)[["row_id", "txn_date", "description", "amount", "balance", "savings_account", "savings_type"]].copy()
+                                        section_df = section_df.rename(columns={"txn_date": "Date", "description": "Description", "amount": "Amount", "balance": "Balance", "savings_account": "Savings Account", "savings_type": "Savings Type"})
+                                        section_df = section_df.drop(columns=["row_id"])
                                         config = {
-                                            "Row": st.column_config.NumberColumn("Row", disabled=True),
                                             "Date": st.column_config.TextColumn("Date", disabled=True),
                                             "Description": st.column_config.TextColumn("Description", disabled=True, width="large"),
                                             "Amount": st.column_config.NumberColumn("Amount", disabled=True, format="%.2f"),
+                                            "Balance": st.column_config.NumberColumn("Balance", disabled=True, format="%.2f"),
                                             "Savings Account": st.column_config.SelectboxColumn("Savings Account", options=db.SAVINGS_ACCOUNTS),
                                             "Savings Type": st.column_config.SelectboxColumn("Savings Type", options=["deposit", "withdrawal"]),
                                         }
                                     elif route_name == "debt_payment":
-                                        section_df = pd.DataFrame(section_rows)[["row_id", "txn_date", "description", "amount", "debt_name"]].copy()
-                                        section_df = section_df.rename(columns={"row_id": "Row", "txn_date": "Date", "description": "Description", "amount": "Amount", "debt_name": "Debt Name"})
+                                        section_df = pd.DataFrame(section_rows)[["row_id", "txn_date", "description", "amount", "balance", "debt_name"]].copy()
+                                        section_df = section_df.rename(columns={"txn_date": "Date", "description": "Description", "amount": "Amount", "balance": "Balance", "debt_name": "Debt Name"})
+                                        section_df = section_df.drop(columns=["row_id"])
                                         config = {
-                                            "Row": st.column_config.NumberColumn("Row", disabled=True),
                                             "Date": st.column_config.TextColumn("Date", disabled=True),
                                             "Description": st.column_config.TextColumn("Description", disabled=True, width="large"),
                                             "Amount": st.column_config.NumberColumn("Amount", disabled=True, format="%.2f"),
+                                            "Balance": st.column_config.NumberColumn("Balance", disabled=True, format="%.2f"),
                                             "Debt Name": st.column_config.SelectboxColumn("Debt Name", options=debt_name_options),
                                         }
                                     else:
-                                        section_df = pd.DataFrame(section_rows)[["row_id", "txn_date", "description", "amount", "category", "is_recurring"]].copy()
-                                        section_df = section_df.rename(columns={"row_id": "Row", "txn_date": "Date", "description": "Description", "amount": "Amount", "category": "Category", "is_recurring": "Recurring?"})
+                                        section_df = pd.DataFrame(section_rows)[["row_id", "txn_date", "description", "amount", "balance", "category", "is_recurring"]].copy()
+                                        section_df = section_df.rename(columns={"txn_date": "Date", "description": "Description", "amount": "Amount", "balance": "Balance", "category": "Category", "is_recurring": "Recurring?"})
+                                        section_df = section_df.drop(columns=["row_id"])
                                         config = {
-                                            "Row": st.column_config.NumberColumn("Row", disabled=True),
                                             "Date": st.column_config.TextColumn("Date", disabled=True),
                                             "Description": st.column_config.TextColumn("Description", disabled=True, width="large"),
                                             "Amount": st.column_config.NumberColumn("Amount", disabled=True, format="%.2f"),
+                                            "Balance": st.column_config.NumberColumn("Balance", disabled=True, format="%.2f"),
                                             "Category": st.column_config.SelectboxColumn("Category", options=sorted(set(VARIABLE_EXPENSE_CATEGORIES + ["Other"]))),
                                             "Recurring?": st.column_config.CheckboxColumn("Recurring?"),
                                         }
@@ -2092,6 +2111,7 @@ if page == "🧭 Planning":
                             editor_columns = [
                                 "row_id",
                                 "txn_date",
+                                "balance",
                                 "amount",
                                 "description",
                                 "route",
@@ -2112,6 +2132,7 @@ if page == "🧭 Planning":
                             column_config = {
                                 "row_id": st.column_config.NumberColumn("Row", disabled=True),
                                 "txn_date": st.column_config.TextColumn("Date", disabled=True),
+                                "balance": st.column_config.NumberColumn("Balance", disabled=True, format="%.2f"),
                                 "amount": st.column_config.NumberColumn("Amount", disabled=True, format="%.2f"),
                                 "description": st.column_config.TextColumn("Description", disabled=True, width="large"),
                                 "route": st.column_config.SelectboxColumn(
