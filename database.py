@@ -232,6 +232,18 @@ def init_db() -> None:
                                          DEFAULT to_char(now(), 'YYYY-MM-DD HH24:MI:SS')
                     )
                 """)
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS import_history (
+                        id            SERIAL PRIMARY KEY,
+                        fingerprint   TEXT   NOT NULL UNIQUE,
+                        route         TEXT   NOT NULL,
+                        txn_date      TEXT   NOT NULL,
+                        amount        REAL   NOT NULL,
+                        description   TEXT,
+                        created_at    TEXT   NOT NULL
+                                      DEFAULT to_char(now(), 'YYYY-MM-DD HH24:MI:SS')
+                    )
+                """)
             conn.commit()
             # Migration: add columns if missing
             with conn.cursor() as cur:
@@ -363,6 +375,16 @@ def init_db() -> None:
                 total_liabilities  REAL    NOT NULL,
                 notes              TEXT,
                 created_at         TEXT    NOT NULL DEFAULT (datetime('now'))
+            );
+
+            CREATE TABLE IF NOT EXISTS import_history (
+                id            INTEGER PRIMARY KEY AUTOINCREMENT,
+                fingerprint   TEXT    NOT NULL UNIQUE,
+                route         TEXT    NOT NULL,
+                txn_date      TEXT    NOT NULL,
+                amount        REAL    NOT NULL,
+                description   TEXT,
+                created_at    TEXT    NOT NULL DEFAULT (datetime('now'))
             );
         """)
         conn.commit()
@@ -891,3 +913,30 @@ def get_net_worth_snapshots(limit: int = 36) -> list:
         "SELECT * FROM net_worth_snapshots ORDER BY snapshot_date DESC"
     )
     return rows[: max(1, int(limit))]
+
+
+# ---------------------------------------------------------------------------
+# Import History (dedupe)
+# ---------------------------------------------------------------------------
+
+def has_import_fingerprint(fingerprint: str) -> bool:
+    rows = _read(
+        "SELECT id FROM import_history WHERE fingerprint = %s",
+        (fingerprint,),
+    )
+    return len(rows) > 0
+
+
+def add_import_history(
+    fingerprint: str,
+    route: str,
+    txn_date: str,
+    amount: float,
+    description: str,
+) -> None:
+    _write(
+        """INSERT INTO import_history
+           (fingerprint, route, txn_date, amount, description)
+           VALUES (%s, %s, %s, %s, %s)""",
+        (fingerprint, route, txn_date, amount, description),
+    )

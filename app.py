@@ -17,6 +17,7 @@ import html
 import hashlib
 import hmac
 import os
+import re
 from datetime import date, datetime, timedelta, timezone
 
 import pandas as pd
@@ -1003,6 +1004,161 @@ def _apply_import_rules(description: str, current_category: str, rules: list[dic
     return current_category, False
 
 
+def _normalize_text(value: str) -> str:
+    text = (value or "").strip().lower()
+    text = re.sub(r"\s+", " ", text)
+    return text
+
+
+def _parse_statement_date(value) -> str | None:
+    if value is None:
+        return None
+    parsed = pd.to_datetime(value, errors="coerce")
+    if pd.isna(parsed):
+        return None
+    return parsed.date().isoformat()
+
+
+def _parse_statement_amount(value) -> float | None:
+    if value is None:
+        return None
+    if isinstance(value, (int, float)):
+        amount = float(value)
+        if amount == 0:
+            return None
+        return amount
+    text = str(value).strip()
+    if not text:
+        return None
+    is_negative = False
+    if text.startswith("(") and text.endswith(")"):
+        is_negative = True
+        text = text[1:-1]
+    text = text.replace("$", "").replace(",", "").strip()
+    try:
+        amount = float(text)
+    except ValueError:
+        return None
+    if is_negative and amount > 0:
+        amount = -amount
+    if amount == 0:
+        return None
+    return amount
+
+
+def _match_debt_target(description: str, debt_rows: list[dict]) -> dict | None:
+    desc = _normalize_text(description)
+    if not desc:
+        return None
+    for d in debt_rows:
+        debt_name = _normalize_text(str(d.get("name", "")))
+        if debt_name and debt_name in desc:
+            return d
+    debt_keywords = ["credit card", "cc payment", "loan payment", "mortgage payment", "student loan"]
+    if any(kw in desc for kw in debt_keywords):
+        return debt_rows[0] if debt_rows else None
+    return None
+
+
+def _route_statement_row(
+    txn_date: str,
+    signed_amount: float,
+    description: str,
+    mapped_category: str,
+    mapped_recurring: bool,
+    debt_rows: list[dict],
+    savings_account: str,
+    default_income_source: str,
+) -> dict:
+    desc = _normalize_text(description)
+    amount_abs = abs(float(signed_amount))
+
+    transfer_terms = ["transfer", "xfer", "internal transfer"]
+    savings_terms = ["savings", "hysa", "high yield", "money market"]
+    income_terms = ["payroll", "salary", "direct deposit", "refund", "interest", "dividend"]
+    debt_terms = ["payment", "autopay", "credit card", "loan", "mortgage"]
+
+    is_transfer = any(t in desc for t in transfer_terms)
+    has_savings_term = any(t in desc for t in savings_terms)
+    is_income_like = any(t in desc for t in income_terms)
+    is_debt_like = any(t in desc for t in debt_terms)
+
+    debt_target = _match_debt_target(description, debt_rows) if is_debt_like else None
+
+    if signed_amount < 0:
+        if is_transfer and has_savings_term:
+            return {
+                "route": "savings_transfer",
+                "txn_date": txn_date,
+                "amount": amount_abs,
+                "description": description,
+                "savings_account": savings_account,
+                "savings_type": "deposit",
+                "target": savings_account,
+            }
+        if debt_target is not None:
+            return {
+                "route": "debt_payment",
+                "txn_date": txn_date,
+                "amount": amount_abs,
+                "description": description,
+                "debt_id": int(debt_target["id"]),
+                "target": str(debt_target["name"]),
+            }
+        return {
+            "route": "variable_expense",
+            "txn_date": txn_date,
+            "amount": amount_abs,
+            "description": description,
+            "category": mapped_category if mapped_category in VARIABLE_EXPENSE_CATEGORIES else "Other",
+            "is_recurring": bool(mapped_recurring),
+            "target": mapped_category if mapped_category in VARIABLE_EXPENSE_CATEGORIES else "Other",
+        }
+
+    # Positive inflows
+    if is_transfer and has_savings_term:
+        return {
+            "route": "savings_transfer",
+            "txn_date": txn_date,
+            "amount": amount_abs,
+            "description": description,
+            "savings_account": savings_account,
+            "savings_type": "withdrawal",
+            "target": savings_account,
+        }
+    if is_income_like or not is_debt_like:
+        income_category = mapped_category if mapped_category in INCOME_CATEGORIES else "Other"
+        return {
+            "route": "income",
+            "txn_date": txn_date,
+            "amount": amount_abs,
+            "description": description,
+            "category": income_category,
+            "source": default_income_source,
+            "target": f"{default_income_source}:{income_category}",
+        }
+    income_category = mapped_category if mapped_category in INCOME_CATEGORIES else "Other"
+    return {
+        "route": "income",
+        "txn_date": txn_date,
+        "amount": amount_abs,
+        "description": description,
+        "category": income_category,
+        "source": default_income_source,
+        "target": f"{default_income_source}:{income_category}",
+    }
+
+
+def _import_fingerprint(route_payload: dict) -> str:
+    route = str(route_payload.get("route", ""))
+    txn_date = str(route_payload.get("txn_date", ""))
+    amount = float(route_payload.get("amount", 0.0))
+    desc = _normalize_text(str(route_payload.get("description", "")))
+    target = str(route_payload.get("target", ""))
+    raw = f"{route}|{txn_date}|{amount:.2f}|{desc}|{target}"
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
 # ==========================================================================
 # PAGE: PLANNING
 # ==========================================================================
@@ -1274,7 +1430,7 @@ if page == "🧭 Planning":
                     _notify("success", "Rule deleted.")
                     st.rerun()
 
-        with _section_card("CSV Import Pipeline", "Import variable expenses in bulk with preview and rule-based categorization."):
+        with _section_card("CSV Import Pipeline", "Import statements into income, expenses, savings transfers, and debt payments with dedupe."):
             up_file = st.file_uploader("Upload CSV", type=["csv"], key="import_csv")
             if up_file is not None:
                 try:
@@ -1285,7 +1441,7 @@ if page == "🧭 Planning":
 
                 if not df_raw.empty:
                     cols = list(df_raw.columns)
-                    c1, c2, c3, c4 = st.columns(4)
+                    c1, c2, c3, c4, c5, c6 = st.columns(6)
                     with c1:
                         col_date = st.selectbox("Date Column", cols, index=cols.index("date") if "date" in cols else 0)
                     with c2:
@@ -1294,43 +1450,121 @@ if page == "🧭 Planning":
                         col_desc = st.selectbox("Description Column", cols, index=cols.index("description") if "description" in cols else min(2, len(cols)-1))
                     with c4:
                         col_cat = st.selectbox("Category Column", ["(none)"] + cols)
+                    with c5:
+                        import_savings_account = st.selectbox("Savings Account", db.SAVINGS_ACCOUNTS, index=min(2, len(db.SAVINGS_ACCOUNTS) - 1))
+                    with c6:
+                        import_income_source = st.selectbox("Income Source", INCOME_SOURCES, index=min(2, len(INCOME_SOURCES) - 1))
 
-                    preview_rows: list[dict] = []
-                    for _, row in df_raw.head(200).iterrows():
+                    debt_rows = db.get_debts()
+                    routed_rows: list[dict] = []
+                    invalid_rows = 0
+                    for _, row in df_raw.iterrows():
+                        parsed_date = _parse_statement_date(row.get(col_date))
+                        parsed_amount = _parse_statement_amount(row.get(col_amount))
+                        if not parsed_date or parsed_amount is None:
+                            invalid_rows += 1
+                            continue
+                        raw_desc = str(row.get(col_desc, "") or "")
                         raw_category = "Other" if col_cat == "(none)" else str(row.get(col_cat, "Other") or "Other")
                         mapped_category, mapped_recurring = _apply_import_rules(
-                            str(row.get(col_desc, "")), raw_category, rules
+                            raw_desc, raw_category, rules
                         )
-                        preview_rows.append(
-                            {
-                                "date": str(row.get(col_date, "")),
-                                "amount": float(row.get(col_amount, 0) or 0),
-                                "description": str(row.get(col_desc, "") or ""),
-                                "category": mapped_category if mapped_category in VARIABLE_EXPENSE_CATEGORIES else "Other",
-                                "is_recurring": bool(mapped_recurring),
-                            }
+                        payload = _route_statement_row(
+                            txn_date=parsed_date,
+                            signed_amount=float(parsed_amount),
+                            description=raw_desc,
+                            mapped_category=mapped_category,
+                            mapped_recurring=mapped_recurring,
+                            debt_rows=debt_rows,
+                            savings_account=import_savings_account,
+                            default_income_source=import_income_source,
+                        )
+                        payload["fingerprint"] = _import_fingerprint(payload)
+                        routed_rows.append(payload)
+
+                    if routed_rows:
+                        preview_limit = min(300, len(routed_rows))
+                        st.caption(
+                            f"Prepared {len(routed_rows)} valid rows, {invalid_rows} invalid rows skipped during parsing. Showing first {preview_limit}."
                         )
 
-                    if preview_rows:
-                        st.caption(f"Previewing {len(preview_rows)} rows (max 200 shown).")
-                        st.dataframe(pd.DataFrame(preview_rows), width="stretch", hide_index=True)
+                        summary_counts: dict[str, int] = {}
+                        for rr in routed_rows:
+                            summary_counts[rr["route"]] = summary_counts.get(rr["route"], 0) + 1
+                        st.write(
+                            "Routing summary: "
+                            + ", ".join(f"{route}={count}" for route, count in sorted(summary_counts.items()))
+                        )
 
-                        if st.button("Import Preview Rows", key="import_preview_rows"):
+                        preview_df = pd.DataFrame(routed_rows[:preview_limit]).copy()
+                        if "debt_id" in preview_df.columns:
+                            preview_df = preview_df.drop(columns=["debt_id"])
+                        st.dataframe(preview_df, width="stretch", hide_index=True)
+
+                        if st.button("Import Routed Rows", key="import_preview_rows"):
                             imported = 0
-                            skipped = 0
-                            for r in preview_rows:
-                                if r["amount"] <= 0 or not r["date"]:
-                                    skipped += 1
+                            duplicates = 0
+                            failed = 0
+
+                            for rr in routed_rows:
+                                fp = str(rr["fingerprint"])
+                                if db.has_import_fingerprint(fp):
+                                    duplicates += 1
                                     continue
-                                db.add_variable_expense(
-                                    str(r["date"]),
-                                    float(r["amount"]),
-                                    r["category"],
-                                    r["description"],
-                                    bool(r["is_recurring"]),
-                                )
-                                imported += 1
-                            _notify("success", f"Imported {imported} row(s). Skipped {skipped} invalid row(s).")
+
+                                try:
+                                    if rr["route"] == "income":
+                                        db.add_income(
+                                            rr["txn_date"],
+                                            float(rr["amount"]),
+                                            rr.get("category", "Other"),
+                                            rr.get("source", "Shared Checking"),
+                                            rr.get("description", ""),
+                                        )
+                                    elif rr["route"] == "variable_expense":
+                                        db.add_variable_expense(
+                                            rr["txn_date"],
+                                            float(rr["amount"]),
+                                            rr.get("category", "Other"),
+                                            rr.get("description", ""),
+                                            bool(rr.get("is_recurring", False)),
+                                        )
+                                    elif rr["route"] == "savings_transfer":
+                                        db.add_savings_transaction(
+                                            rr.get("savings_account", import_savings_account),
+                                            rr["txn_date"],
+                                            float(rr["amount"]),
+                                            rr.get("savings_type", "deposit"),
+                                            rr.get("description", "Statement import transfer"),
+                                        )
+                                    elif rr["route"] == "debt_payment":
+                                        debt_id = int(rr.get("debt_id", 0))
+                                        debt = next((d for d in debt_rows if int(d["id"]) == debt_id), None)
+                                        if debt is None:
+                                            failed += 1
+                                            continue
+                                        new_balance = max(float(debt["current_balance"]) - float(rr["amount"]), 0.0)
+                                        db.update_debt_balance(debt_id, new_balance)
+                                        debt["current_balance"] = new_balance
+                                    else:
+                                        failed += 1
+                                        continue
+
+                                    db.add_import_history(
+                                        fp,
+                                        rr["route"],
+                                        rr["txn_date"],
+                                        float(rr["amount"]),
+                                        rr.get("description", ""),
+                                    )
+                                    imported += 1
+                                except Exception:
+                                    failed += 1
+
+                            _notify(
+                                "success",
+                                f"Imported {imported} row(s). Duplicates skipped: {duplicates}. Failed: {failed}.",
+                            )
                             st.rerun()
 
 
