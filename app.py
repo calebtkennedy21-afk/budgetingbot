@@ -1976,15 +1976,18 @@ if page == "🧭 Planning":
                                             "Debt Name": st.column_config.SelectboxColumn("Debt Name", options=debt_name_options),
                                         }
                                     else:
-                                        section_df = pd.DataFrame(section_rows)[["row_id", "txn_date", "description", "amount", "balance", "category", "is_recurring"]].copy()
-                                        section_df = section_df.rename(columns={"txn_date": "Date", "description": "Description", "amount": "Amount", "balance": "Balance", "category": "Category", "is_recurring": "Recurring?"})
+                                        section_df = pd.DataFrame(section_rows)[["row_id", "txn_date", "description", "amount", "balance", "route", "category", "fixed_name", "frequency", "is_recurring"]].copy()
+                                        section_df = section_df.rename(columns={"txn_date": "Date", "description": "Description", "amount": "Amount", "balance": "Balance", "route": "Route", "category": "Category", "fixed_name": "Fixed Expense Name", "frequency": "Frequency", "is_recurring": "Recurring?"})
                                         section_df = section_df.drop(columns=["row_id"])
                                         config = {
                                             "Date": st.column_config.TextColumn("Date", disabled=True),
                                             "Description": st.column_config.TextColumn("Description", disabled=True, width="large"),
                                             "Amount": st.column_config.NumberColumn("Amount", disabled=True, format="%.2f"),
                                             "Balance": st.column_config.NumberColumn("Balance", disabled=True, format="%.2f"),
+                                            "Route": st.column_config.SelectboxColumn("Route", options=["variable_expense", "fixed_expense"]),
                                             "Category": st.column_config.SelectboxColumn("Category", options=sorted(set(VARIABLE_EXPENSE_CATEGORIES + ["Other"]))),
+                                            "Fixed Expense Name": st.column_config.TextColumn("Fixed Expense Name"),
+                                            "Frequency": st.column_config.SelectboxColumn("Frequency", options=["monthly", "yearly", "one_time"]),
                                             "Recurring?": st.column_config.CheckboxColumn("Recurring?"),
                                         }
 
@@ -2012,34 +2015,38 @@ if page == "🧭 Planning":
                                         txn_date = str(er.get("Date", er.get("txn_date", "")))
                                         description = str(er.get("Description", er.get("description", "")) or "")
 
+                                        selected_route = str(er.get("Route", er.get("route", route_name)) or route_name)
+                                        if selected_route not in {"income", "fixed_expense", "variable_expense", "savings_transfer", "debt_payment"}:
+                                            selected_route = route_name
+
                                         rr: dict = {
-                                            "route": route_name,
+                                            "route": selected_route,
                                             "txn_date": txn_date,
                                             "amount": amount,
                                             "description": description,
                                         }
-                                        if route_name == "income":
+                                        if rr["route"] == "income":
                                             cat = str(er.get("Category", er.get("category", "Other")))
                                             rr["category"] = cat if cat in INCOME_CATEGORIES else "Other"
                                             rr["source"] = str(er.get("Income Source", er.get("source", import_income_source)))
                                             rr["target"] = f"{rr['source']}:{rr['category']}"
-                                        elif route_name == "fixed_expense":
+                                        elif rr["route"] == "fixed_expense":
                                             fixed_name = str(er.get("Fixed Expense Name", er.get("fixed_name", "")) or description or "Fixed expense")
                                             rr["fixed_name"] = fixed_name
                                             rr["category"] = str(er.get("Category", er.get("category", "Other")))
                                             rr["frequency"] = str(er.get("Frequency", er.get("frequency", "monthly")) or "monthly")
                                             rr["is_recurring"] = bool(er.get("Recurring?", er.get("is_recurring", True)))
                                             rr["target"] = fixed_name
-                                        elif route_name == "variable_expense":
+                                        elif rr["route"] == "variable_expense":
                                             cat = str(er.get("Category", er.get("category", "Other")))
                                             rr["category"] = cat if cat in VARIABLE_EXPENSE_CATEGORIES else "Other"
                                             rr["is_recurring"] = bool(er.get("Recurring?", er.get("is_recurring", False)))
                                             rr["target"] = rr["category"]
-                                        elif route_name == "savings_transfer":
+                                        elif rr["route"] == "savings_transfer":
                                             rr["savings_account"] = str(er.get("Savings Account", er.get("savings_account", import_savings_account)))
                                             rr["savings_type"] = str(er.get("Savings Type", er.get("savings_type", "deposit")))
                                             rr["target"] = rr["savings_account"]
-                                        elif route_name == "debt_payment":
+                                        elif rr["route"] == "debt_payment":
                                             debt_name = str(er.get("Debt Name", er.get("debt_name", "")) or "")
                                             rr["debt_id"] = int(debt_name_to_id.get(debt_name, 0)) if debt_name else 0
                                             rr["target"] = debt_name or ""
