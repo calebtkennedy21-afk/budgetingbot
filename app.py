@@ -1289,7 +1289,7 @@ def _route_statement_row(
             "amount": amount_abs,
             "description": description,
             "category": mapped_category if mapped_category in VARIABLE_EXPENSE_CATEGORIES else "Other",
-            "is_recurring": bool(mapped_recurring),
+            "is_recurring": False,
             "target": mapped_category if mapped_category in VARIABLE_EXPENSE_CATEGORIES else "Other",
         }
 
@@ -1976,8 +1976,8 @@ if page == "🧭 Planning":
                                             "Debt Name": st.column_config.SelectboxColumn("Debt Name", options=debt_name_options),
                                         }
                                     else:
-                                        section_df = pd.DataFrame(section_rows)[["row_id", "txn_date", "description", "amount", "balance", "route", "category", "fixed_name", "frequency", "is_recurring"]].copy()
-                                        section_df = section_df.rename(columns={"txn_date": "Date", "description": "Description", "amount": "Amount", "balance": "Balance", "route": "Route", "category": "Category", "fixed_name": "Fixed Expense Name", "frequency": "Frequency", "is_recurring": "Recurring?"})
+                                        section_df = pd.DataFrame(section_rows)[["row_id", "txn_date", "description", "amount", "balance", "route", "category", "fixed_name", "frequency"]].copy()
+                                        section_df = section_df.rename(columns={"txn_date": "Date", "description": "Description", "amount": "Amount", "balance": "Balance", "route": "Route", "category": "Category", "fixed_name": "Fixed Expense Name", "frequency": "Frequency"})
                                         section_df = section_df.drop(columns=["row_id"])
                                         config = {
                                             "Date": st.column_config.TextColumn("Date", disabled=True),
@@ -1988,7 +1988,6 @@ if page == "🧭 Planning":
                                             "Category": st.column_config.SelectboxColumn("Category", options=sorted(set(VARIABLE_EXPENSE_CATEGORIES + ["Other"]))),
                                             "Fixed Expense Name": st.column_config.TextColumn("Fixed Expense Name"),
                                             "Frequency": st.column_config.SelectboxColumn("Frequency", options=["monthly", "yearly", "one_time"]),
-                                            "Recurring?": st.column_config.CheckboxColumn("Recurring?"),
                                         }
 
                                     st.caption(f"Review suggested {label.lower()} before import.")
@@ -2040,7 +2039,7 @@ if page == "🧭 Planning":
                                         elif rr["route"] == "variable_expense":
                                             cat = str(er.get("Category", er.get("category", "Other")))
                                             rr["category"] = cat if cat in VARIABLE_EXPENSE_CATEGORIES else "Other"
-                                            rr["is_recurring"] = bool(er.get("Recurring?", er.get("is_recurring", False)))
+                                            rr["is_recurring"] = False
                                             rr["target"] = rr["category"]
                                         elif rr["route"] == "savings_transfer":
                                             rr["savings_account"] = str(er.get("Savings Account", er.get("savings_account", import_savings_account)))
@@ -2139,7 +2138,6 @@ if page == "🧭 Planning":
                                 "source",
                                 "savings_account",
                                 "savings_type",
-                                "is_recurring",
                                 "frequency",
                                 "fixed_name",
                                 "debt_name",
@@ -2167,7 +2165,6 @@ if page == "🧭 Planning":
                                 "source": st.column_config.SelectboxColumn("Income Source", options=INCOME_SOURCES),
                                 "savings_account": st.column_config.SelectboxColumn("Savings Account", options=db.SAVINGS_ACCOUNTS),
                                 "savings_type": st.column_config.SelectboxColumn("Savings Type", options=["deposit", "withdrawal"]),
-                                "is_recurring": st.column_config.CheckboxColumn("Recurring"),
                                 "frequency": st.column_config.SelectboxColumn("Frequency", options=["monthly", "yearly", "one_time"]),
                                 "fixed_name": st.column_config.TextColumn("Fixed Name"),
                                 "debt_name": st.column_config.SelectboxColumn("Debt", options=debt_name_options),
@@ -2210,7 +2207,7 @@ if page == "🧭 Planning":
                                     elif route == "variable_expense":
                                         cat = str(er.get("category", "Other"))
                                         rr["category"] = cat if cat in VARIABLE_EXPENSE_CATEGORIES else "Other"
-                                        rr["is_recurring"] = bool(er.get("is_recurring", False))
+                                        rr["is_recurring"] = False
                                         rr["target"] = rr["category"]
                                     elif route == "fixed_expense":
                                         fixed_name = str(er.get("fixed_name", "") or description or "Fixed expense")
