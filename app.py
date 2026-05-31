@@ -2778,6 +2778,7 @@ elif page == "📌 Fixed Expenses":
                                     edit_start = st.date_input(
                                         "Start Date",
                                         value=start_value,
+                                        min_value=date(1, 1, 1),
                                         key=f"edit_fix_start_{expense['id']}",
                                     )
                                 with edit_col2:
@@ -3037,6 +3038,7 @@ elif page == "🛒 Variable Expenses":
                                         edit_date = st.date_input(
                                             "Date",
                                             value=date.fromisoformat(str(expense["date"])),
+                                            min_value=date(1, 1, 1),
                                             key=f"edit_var_date_{idx}_{int(expense['id'])}",
                                         )
                                         edit_amount = st.number_input(
@@ -3234,6 +3236,7 @@ elif page == "💵 Savings":
                                     e_date = st.date_input(
                                         "Date",
                                         value=date.fromisoformat(str(row["date"])),
+                                        min_value=date(1, 1, 1),
                                         key=f"es_date_{idx}_{row_idx}_{row['id']}",
                                     )
                                     e_amount = st.number_input(
