@@ -861,6 +861,18 @@ def get_import_rules() -> list:
     return _read("SELECT * FROM import_rules ORDER BY priority ASC, id ASC")
 
 
+def has_import_rule(field: str, pattern: str, target_category: str) -> bool:
+    rows = _read(
+        """SELECT id FROM import_rules
+           WHERE LOWER(field) = LOWER(%s)
+             AND LOWER(pattern) = LOWER(%s)
+             AND LOWER(target_category) = LOWER(%s)
+           LIMIT 1""",
+        (field, pattern, target_category),
+    )
+    return len(rows) > 0
+
+
 def delete_import_rule(record_id: int) -> None:
     _write("DELETE FROM import_rules WHERE id = %s", (record_id,))
 

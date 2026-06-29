@@ -1010,6 +1010,22 @@ def _normalize_text(value: str) -> str:
     return text
 
 
+def _derive_import_rule_pattern(description: str) -> str:
+    text = _normalize_text(description)
+    text = re.sub(r"[^a-z0-9\s]", " ", text)
+    tokens = [tok for tok in text.split() if len(tok) >= 3]
+    stop_tokens = {
+        "pos", "debit", "credit", "card", "purchase", "online", "check", "ach",
+        "payment", "withdrawal", "transfer", "visa", "mastercard", "mc", "fee",
+    }
+    tokens = [tok for tok in tokens if tok not in stop_tokens and not tok.isdigit()]
+    if len(tokens) >= 2:
+        return f"{tokens[0]} {tokens[1]}"
+    if len(tokens) == 1:
+        return tokens[0]
+    return text[:40].strip()
+
+
 def _parse_statement_date(value) -> str | None:
     if value is None:
         return None
@@ -1031,6 +1047,9 @@ def _parse_statement_amount(value) -> float | None:
     if not text:
         return None
 
+    # Normalize common minus variants from PDF extraction.
+    text = text.replace("−", "-").replace("–", "-").replace("—", "-")
+
     text_upper = text.upper()
     force_negative = False
     if text_upper.endswith(" DR") or text_upper.endswith("DR"):
@@ -1043,6 +1062,11 @@ def _parse_statement_amount(value) -> float | None:
     if text.startswith("(") and text.endswith(")"):
         is_negative = True
         text = text[1:-1]
+
+    if text.endswith("-"):
+        is_negative = True
+        text = text[:-1].strip()
+
     text = text.replace("$", "").replace(",", "").strip()
     try:
         amount = float(text)
@@ -1129,7 +1153,7 @@ def _statement_file_to_dataframe(uploaded_file) -> tuple[pd.DataFrame, str, str]
                 "PDF parser is unavailable. Install dependency: pdfplumber.",
             )
 
-        def _extract_from_lines(lines: list[str]) -> list[dict]:
+        def _extract_from_lines(lines: list[str], ocr_used: bool = False) -> list[dict]:
             out: list[dict] = []
             seen: set[tuple[str, float, str]] = set()
             date_pattern = re.compile(r"(\d{4}-\d{2}-\d{2}|\d{1,2}[/-]\d{1,2}(?:[/-]\d{2,4})?)")
@@ -1186,10 +1210,34 @@ def _statement_file_to_dataframe(uploaded_file) -> tuple[pd.DataFrame, str, str]
                         "amount": float(parsed_amount),
                         "balance": float(parsed_balance) if parsed_balance is not None else None,
                         "description": desc,
+                        "ocr_used": bool(ocr_used),
                         "category": "Other",
                     }
                 )
             return out
+
+        def _extract_ocr_lines(raw_pdf: bytes) -> list[str]:
+            try:
+                import pytesseract  # type: ignore[import-not-found]
+            except Exception:
+                return []
+
+            ocr_lines: list[str] = []
+            try:
+                with pdfplumber.open(BytesIO(raw_pdf)) as pdf:
+                    for page in pdf.pages[:20]:
+                        try:
+                            page_img = page.to_image(resolution=220).original
+                            page_text = pytesseract.image_to_string(page_img)
+                        except Exception:
+                            continue
+                        for tline in str(page_text or "").splitlines():
+                            tline = tline.strip()
+                            if tline:
+                                ocr_lines.append(tline)
+            except Exception:
+                return []
+            return ocr_lines
 
         try:
             uploaded_file.seek(0)
@@ -1210,12 +1258,16 @@ def _statement_file_to_dataframe(uploaded_file) -> tuple[pd.DataFrame, str, str]
                         if tline.strip():
                             all_lines.append(tline.strip())
 
-            rows = _extract_from_lines(all_lines)
+            rows = _extract_from_lines(all_lines, ocr_used=False)
+            if not rows:
+                ocr_lines = _extract_ocr_lines(raw_bytes)
+                if ocr_lines:
+                    rows = _extract_from_lines(ocr_lines, ocr_used=True)
             if not rows:
                 return (
                     pd.DataFrame(),
                     file_ext,
-                    "Could not detect transactions in PDF. Try CSV/OFX/QFX export for best results.",
+                    "Could not detect transactions in PDF. Try CSV/OFX/QFX export for best results, or install OCR support (pytesseract + system tesseract).",
                 )
             return pd.DataFrame(rows), file_ext, ""
         except Exception as exc:
@@ -1331,6 +1383,7 @@ def _merge_ai_statement_route(
     base_row: dict,
     ai_row: dict | None,
     fallback_route: dict,
+    min_confidence: float = 0.55,
 ) -> dict:
     merged = dict(fallback_route)
     if not ai_row:
@@ -1338,8 +1391,14 @@ def _merge_ai_statement_route(
         return merged
 
     route = str(ai_row.get("route", "unknown") or "unknown")
-    merged["ai_route_used"] = route != "unknown"
-    merged["ai_confidence"] = float(ai_row.get("confidence", 0.5) or 0.5)
+    confidence = float(ai_row.get("confidence", 0.5) or 0.5)
+    merged["ai_confidence"] = confidence
+
+    if route == "unknown" or confidence < float(min_confidence):
+        merged["ai_route_used"] = False
+        return merged
+
+    merged["ai_route_used"] = True
 
     if route == "fixed_expense":
         merged.update(
@@ -1712,6 +1771,9 @@ if page == "🧭 Planning":
                 elif file_type in {"ofx", "qfx", "pdf"}:
                     st.caption(f"Detected {file_type.upper()} format. Column mapping was auto-applied.")
 
+                if not df_raw.empty and "ocr_used" in df_raw.columns and bool(df_raw["ocr_used"].fillna(False).any()):
+                    st.info("OCR fallback was used for this PDF because direct text extraction could not find transaction rows.")
+
                 if not df_raw.empty:
                     cols = list(df_raw.columns)
                     c1, c2, c3, c4, c5, c6, c7 = st.columns(7)
@@ -1767,8 +1829,18 @@ if page == "🧭 Planning":
                             help="AI helps classify each PDF row as fixed expense, variable expense, income, savings transfer, or debt payment.",
                             key="pdf_ai_enabled",
                         )
+                        pdf_ai_conf_threshold = st.slider(
+                            "AI confidence threshold",
+                            min_value=0.0,
+                            max_value=1.0,
+                            value=0.55,
+                            step=0.05,
+                            help="Rows below this confidence use heuristic fallback routing.",
+                            key="pdf_ai_conf_threshold",
+                        )
                     else:
                         pdf_ai_enabled = False
+                        pdf_ai_conf_threshold = 0.55
 
                     debt_rows = db.get_debts()
                     debt_names = [str(d.get("name", "")) for d in debt_rows if str(d.get("name", ""))]
@@ -1834,7 +1906,12 @@ if page == "🧭 Planning":
                         )
 
                         ai_row = ai_classifications.get(int(base_row["row_id"])) if ai_classifications else None
-                        payload = _merge_ai_statement_route(base_row, ai_row, fallback)
+                        payload = _merge_ai_statement_route(
+                            base_row,
+                            ai_row,
+                            fallback,
+                            min_confidence=float(pdf_ai_conf_threshold),
+                        )
                         payload["balance"] = base_row.get("balance")
                         payload["fingerprint"] = _import_fingerprint(payload)
                         routed_rows.append(payload)
@@ -1853,9 +1930,33 @@ if page == "🧭 Planning":
                             + ", ".join(f"{route}={count}" for route, count in sorted(summary_counts.items()))
                         )
 
+                        if file_type == "pdf" and pdf_ai_enabled and ai_classifications:
+                            ai_used_count = sum(1 for rr in routed_rows if bool(rr.get("ai_route_used", False)))
+                            ai_fallback_count = len(routed_rows) - ai_used_count
+                            st.caption(
+                                f"AI accepted for {ai_used_count} row(s); fallback heuristics used for {ai_fallback_count} row(s) based on confidence threshold {float(pdf_ai_conf_threshold):.2f}."
+                            )
+
                         debt_id_to_name = {int(d["id"]): str(d["name"]) for d in debt_rows}
                         debt_name_to_id = {v: k for k, v in debt_id_to_name.items()}
                         debt_name_options = ["", *sorted(debt_name_to_id.keys())]
+
+                        learn_rules_enabled = st.checkbox(
+                            "Learn import rules from manual overrides",
+                            value=True,
+                            help="When route/category is changed during review, save a reusable description-based rule for future imports.",
+                            key="learn_import_rules_enabled",
+                        )
+                        learn_rules_priority = int(
+                            st.number_input(
+                                "Learned rule priority",
+                                min_value=1,
+                                max_value=9999,
+                                value=80,
+                                step=1,
+                                key="learn_import_rules_priority",
+                            )
+                        )
 
                         friendly_pdf_mode = file_type == "pdf" and not ai_classifications
 
@@ -1881,6 +1982,14 @@ if page == "🧭 Planning":
                                     "ai_route_used": bool(rr.get("ai_route_used", False)),
                                 }
                             )
+
+                        original_by_row_id = {
+                            int(item["row_id"]): {
+                                "route": str(item.get("route", "variable_expense")),
+                                "category": str(item.get("category", "Other")),
+                            }
+                            for item in editable_rows
+                        }
 
                         if friendly_pdf_mode:
                             st.info(
@@ -1929,8 +2038,8 @@ if page == "🧭 Planning":
                                     if route_name == "income":
                                         section_df = pd.DataFrame(section_rows)[["row_id", "txn_date", "description", "amount", "balance", "category", "source"]].copy()
                                         section_df = section_df.rename(columns={"txn_date": "Date", "description": "Description", "amount": "Amount", "balance": "Balance", "category": "Category", "source": "Income Source"})
-                                        section_df = section_df.drop(columns=["row_id"])
                                         config = {
+                                            "row_id": st.column_config.NumberColumn("Row", disabled=True),
                                             "Date": st.column_config.TextColumn("Date", disabled=True),
                                             "Description": st.column_config.TextColumn("Description", disabled=True, width="large"),
                                             "Amount": st.column_config.NumberColumn("Amount", disabled=True, format="%.2f"),
@@ -1941,8 +2050,8 @@ if page == "🧭 Planning":
                                     elif route_name == "fixed_expense":
                                         section_df = pd.DataFrame(section_rows)[["row_id", "txn_date", "description", "amount", "balance", "category", "fixed_name", "frequency", "is_recurring"]].copy()
                                         section_df = section_df.rename(columns={"txn_date": "Date", "description": "Description", "amount": "Amount", "balance": "Balance", "category": "Category", "fixed_name": "Fixed Expense Name", "frequency": "Frequency", "is_recurring": "Recurring?"})
-                                        section_df = section_df.drop(columns=["row_id"])
                                         config = {
+                                            "row_id": st.column_config.NumberColumn("Row", disabled=True),
                                             "Date": st.column_config.TextColumn("Date", disabled=True),
                                             "Description": st.column_config.TextColumn("Description", disabled=True, width="large"),
                                             "Amount": st.column_config.NumberColumn("Amount", disabled=True, format="%.2f"),
@@ -1955,8 +2064,8 @@ if page == "🧭 Planning":
                                     elif route_name == "savings_transfer":
                                         section_df = pd.DataFrame(section_rows)[["row_id", "txn_date", "description", "amount", "balance", "savings_account", "savings_type"]].copy()
                                         section_df = section_df.rename(columns={"txn_date": "Date", "description": "Description", "amount": "Amount", "balance": "Balance", "savings_account": "Savings Account", "savings_type": "Savings Type"})
-                                        section_df = section_df.drop(columns=["row_id"])
                                         config = {
+                                            "row_id": st.column_config.NumberColumn("Row", disabled=True),
                                             "Date": st.column_config.TextColumn("Date", disabled=True),
                                             "Description": st.column_config.TextColumn("Description", disabled=True, width="large"),
                                             "Amount": st.column_config.NumberColumn("Amount", disabled=True, format="%.2f"),
@@ -1967,8 +2076,8 @@ if page == "🧭 Planning":
                                     elif route_name == "debt_payment":
                                         section_df = pd.DataFrame(section_rows)[["row_id", "txn_date", "description", "amount", "balance", "debt_name"]].copy()
                                         section_df = section_df.rename(columns={"txn_date": "Date", "description": "Description", "amount": "Amount", "balance": "Balance", "debt_name": "Debt Name"})
-                                        section_df = section_df.drop(columns=["row_id"])
                                         config = {
+                                            "row_id": st.column_config.NumberColumn("Row", disabled=True),
                                             "Date": st.column_config.TextColumn("Date", disabled=True),
                                             "Description": st.column_config.TextColumn("Description", disabled=True, width="large"),
                                             "Amount": st.column_config.NumberColumn("Amount", disabled=True, format="%.2f"),
@@ -1978,8 +2087,8 @@ if page == "🧭 Planning":
                                     else:
                                         section_df = pd.DataFrame(section_rows)[["row_id", "txn_date", "description", "amount", "balance", "route", "category", "fixed_name", "frequency"]].copy()
                                         section_df = section_df.rename(columns={"txn_date": "Date", "description": "Description", "amount": "Amount", "balance": "Balance", "route": "Route", "category": "Category", "fixed_name": "Fixed Expense Name", "frequency": "Frequency"})
-                                        section_df = section_df.drop(columns=["row_id"])
                                         config = {
+                                            "row_id": st.column_config.NumberColumn("Row", disabled=True),
                                             "Date": st.column_config.TextColumn("Date", disabled=True),
                                             "Description": st.column_config.TextColumn("Description", disabled=True, width="large"),
                                             "Amount": st.column_config.NumberColumn("Amount", disabled=True, format="%.2f"),
@@ -2005,11 +2114,16 @@ if page == "🧭 Planning":
                                 imported = 0
                                 duplicates = 0
                                 failed = 0
+                                learned_rules = 0
+                                learned_rule_keys: set[tuple[str, str, str]] = set()
+                                learned_rules = 0
+                                learned_rule_keys: set[tuple[str, str, str]] = set()
 
                                 group_import_order = ["income", "fixed_expense", "variable_expense", "savings_transfer", "debt_payment"]
                                 for route_name in group_import_order:
                                     edited_rows = edited_groups.get(route_name, pd.DataFrame()).to_dict("records") if route_name in edited_groups else []
                                     for er in edited_rows:
+                                        row_id = int(er.get("row_id", -1))
                                         amount = float(er.get("Amount", er.get("amount", 0.0)))
                                         txn_date = str(er.get("Date", er.get("txn_date", "")))
                                         description = str(er.get("Description", er.get("description", "")) or "")
@@ -2114,13 +2228,43 @@ if page == "🧭 Planning":
                                                 float(rr["amount"]),
                                                 rr.get("description", ""),
                                             )
+
+                                            if learn_rules_enabled and rr["route"] == "variable_expense":
+                                                pattern = _derive_import_rule_pattern(rr.get("description", ""))
+                                                target_cat = str(rr.get("category", "Other"))
+                                                orig = original_by_row_id.get(row_id)
+                                                was_overridden = (
+                                                    orig is not None
+                                                    and (
+                                                        str(orig.get("route", "")) != str(rr.get("route", ""))
+                                                        or str(orig.get("category", "")) != target_cat
+                                                    )
+                                                )
+                                                rule_key = ("description", pattern, target_cat)
+                                                if (
+                                                    was_overridden
+                                                    and target_cat in VARIABLE_EXPENSE_CATEGORIES
+                                                    and len(pattern) >= 3
+                                                    and rule_key not in learned_rule_keys
+                                                    and not db.has_import_rule("description", pattern, target_cat)
+                                                ):
+                                                    db.add_import_rule(
+                                                        "description",
+                                                        pattern,
+                                                        target_cat,
+                                                        bool(rr.get("is_recurring", False)),
+                                                        int(learn_rules_priority),
+                                                    )
+                                                    learned_rule_keys.add(rule_key)
+                                                    learned_rules += 1
+
                                             imported += 1
                                         except Exception:
                                             failed += 1
 
                                 _notify(
                                     "success",
-                                    f"Imported {imported} row(s). Duplicates skipped: {duplicates}. Failed: {failed}.",
+                                    f"Imported {imported} row(s). Duplicates skipped: {duplicates}. Failed: {failed}. Learned rules: {learned_rules}.",
                                 )
                                 st.rerun()
 
@@ -2146,6 +2290,39 @@ if page == "🧭 Planning":
                             ]
 
                             editor_df = pd.DataFrame(editable_rows)[editor_columns].copy() if editable_rows else pd.DataFrame(columns=editor_columns)
+
+                            if not editor_df.empty:
+                                u1, u2 = st.columns(2)
+                                with u1:
+                                    uncertain_conf_cutoff = st.slider(
+                                        "Uncertain review confidence cutoff",
+                                        min_value=0.0,
+                                        max_value=1.0,
+                                        value=0.65,
+                                        step=0.05,
+                                        key="uncertain_review_confidence_cutoff",
+                                    )
+                                with u2:
+                                    high_amount_cutoff = st.number_input(
+                                        "High-amount review threshold ($)",
+                                        min_value=0.0,
+                                        value=300.0,
+                                        step=25.0,
+                                        key="uncertain_review_amount_cutoff",
+                                    )
+
+                                uncertain_mask = (
+                                    (editor_df["ai_route_used"] == False)
+                                    | (editor_df["ai_confidence"] <= float(uncertain_conf_cutoff))
+                                    | (editor_df["amount"].abs() >= float(high_amount_cutoff))
+                                )
+                                uncertain_df = editor_df.loc[
+                                    uncertain_mask,
+                                    ["row_id", "txn_date", "amount", "description", "route", "category", "ai_confidence", "ai_route_used"],
+                                ].copy()
+                                st.caption(f"Uncertain/high-value rows to review first: {len(uncertain_df)}")
+                                if not uncertain_df.empty:
+                                    st.dataframe(uncertain_df, width="stretch", hide_index=True)
 
                             column_config = {
                                 "row_id": st.column_config.NumberColumn("Row", disabled=True),
@@ -2188,6 +2365,7 @@ if page == "🧭 Planning":
 
                                 edited_rows = edited_df.to_dict("records") if isinstance(edited_df, pd.DataFrame) else []
                                 for er in edited_rows:
+                                    row_id = int(er.get("row_id", -1))
                                     route = str(er.get("route", "variable_expense"))
                                     amount = float(er.get("amount", 0.0))
                                     txn_date = str(er.get("txn_date", ""))
@@ -2292,13 +2470,43 @@ if page == "🧭 Planning":
                                             float(rr["amount"]),
                                             rr.get("description", ""),
                                         )
+
+                                        if learn_rules_enabled and rr["route"] == "variable_expense":
+                                            pattern = _derive_import_rule_pattern(rr.get("description", ""))
+                                            target_cat = str(rr.get("category", "Other"))
+                                            orig = original_by_row_id.get(row_id)
+                                            was_overridden = (
+                                                orig is not None
+                                                and (
+                                                    str(orig.get("route", "")) != str(rr.get("route", ""))
+                                                    or str(orig.get("category", "")) != target_cat
+                                                )
+                                            )
+                                            rule_key = ("description", pattern, target_cat)
+                                            if (
+                                                was_overridden
+                                                and target_cat in VARIABLE_EXPENSE_CATEGORIES
+                                                and len(pattern) >= 3
+                                                and rule_key not in learned_rule_keys
+                                                and not db.has_import_rule("description", pattern, target_cat)
+                                            ):
+                                                db.add_import_rule(
+                                                    "description",
+                                                    pattern,
+                                                    target_cat,
+                                                    bool(rr.get("is_recurring", False)),
+                                                    int(learn_rules_priority),
+                                                )
+                                                learned_rule_keys.add(rule_key)
+                                                learned_rules += 1
+
                                         imported += 1
                                     except Exception:
                                         failed += 1
 
                                 _notify(
                                     "success",
-                                    f"Imported {imported} row(s). Duplicates skipped: {duplicates}. Failed: {failed}.",
+                                    f"Imported {imported} row(s). Duplicates skipped: {duplicates}. Failed: {failed}. Learned rules: {learned_rules}.",
                                 )
                                 st.rerun()
 

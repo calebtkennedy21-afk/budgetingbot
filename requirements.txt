@@ -6,3 +6,4 @@ openai==1.30.0
 httpx==0.27.2
 ofxparse==0.21
 pdfplumber==0.11.4
+pytesseract==0.3.13

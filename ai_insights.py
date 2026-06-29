@@ -390,15 +390,19 @@ def classify_statement_rows(
     for idx, row in enumerate(statement_rows):
         payload_rows.append(
             {
-                "row_id": idx,
-                "date": row.get("date", ""),
+                "row_id": int(row.get("row_id", idx)),
+                "date": row.get("txn_date", row.get("date", "")),
                 "amount": row.get("amount", ""),
                 "description": row.get("description", ""),
-                "category_hint": row.get("category", "Other"),
+                "category_hint": row.get("mapped_category", row.get("category", "Other")),
             }
         )
 
-    prompt = f"""Classify household banking statement rows into import destinations.
+    # Keep each request small enough for consistent JSON output on larger PDFs.
+    batch_size = 40
+
+    def _classify_batch(rows_batch: list[dict]) -> list[dict]:
+        prompt = f"""Classify household banking statement rows into import destinations.
 
 Statement owner: {statement_owner}
 Default income source: {default_income_source}
@@ -435,10 +439,9 @@ Rules:
 - confidence should be a number from 0 to 1.
 
 Rows:
-{json.dumps(payload_rows, ensure_ascii=False)}
+{json.dumps(rows_batch, ensure_ascii=False)}
 """
 
-    try:
         response = client.chat.completions.create(
             model="gpt-4o-mini",
             messages=[
@@ -459,13 +462,13 @@ Rows:
             return []
 
         normalized: list[dict] = []
-        for idx, item in enumerate(parsed[: len(statement_rows)]):
+        for idx, item in enumerate(parsed[: len(rows_batch)]):
             if not isinstance(item, dict):
-                normalized.append({"row_id": idx, "route": "unknown"})
+                normalized.append({"row_id": int(rows_batch[idx].get("row_id", idx)), "route": "unknown"})
                 continue
             normalized.append(
                 {
-                    "row_id": int(item.get("row_id", idx)),
+                    "row_id": int(item.get("row_id", rows_batch[idx].get("row_id", idx))),
                     "route": str(item.get("route", "unknown")),
                     "category": str(item.get("category", "Other") or "Other"),
                     "is_recurring": bool(item.get("is_recurring", False)),
@@ -479,6 +482,18 @@ Rows:
                 }
             )
         return normalized
+
+    try:
+        results: list[dict] = []
+        for start in range(0, len(payload_rows), batch_size):
+            batch_rows = payload_rows[start:start + batch_size]
+            batch_result = _classify_batch(batch_rows)
+            if not batch_result:
+                for item in batch_rows:
+                    results.append({"row_id": int(item.get("row_id", 0)), "route": "unknown", "confidence": 0.0})
+                continue
+            results.extend(batch_result)
+        return results
     except Exception:
         return []
 
